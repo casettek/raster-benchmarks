@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Raster Benchmarks</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg: #ffffff;
+            --bg-subtle: #fafafa;
+            --text: #111111;
+            --text-muted: #666666;
+            --text-faint: #999999;
+            --text-dim: #777777;
+            --border: #e5e5e5;
+            --border-input: #d4d4d4;
+            --result-bg: #fafafa;
+            --result-border: #e5e5e5;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #0b0d12;
+                --bg-subtle: #111526;
+                --text: #e9ecf3;
+                --text-muted: #b6bed6;
+                --text-faint: #6b738f;
+                --text-dim: #8a92ad;
+                --border: rgba(255, 255, 255, 0.10);
+                --border-input: rgba(255, 255, 255, 0.14);
+                --result-bg: rgba(255, 255, 255, 0.03);
+                --result-border: rgba(255, 255, 255, 0.10);
+            }
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+            padding: 3rem 1.5rem;
+            max-width: 720px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            margin-bottom: 0.25rem;
+        }
+
+        .subtitle {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            margin-bottom: 2.5rem;
+        }
+
+        .section-header {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-faint);
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .tool-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .tool-link {
+            display: flex;
+            flex-direction: column;
+            gap: 0.125rem;
+            padding: 0.875rem 1rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg);
+            text-decoration: none;
+            color: inherit;
+            transition: border-color 0.15s, background 0.15s;
+        }
+
+        .tool-link:hover {
+            border-color: var(--border-input);
+            background: var(--bg-subtle);
+        }
+
+        .tool-name {
+            font-size: 0.9375rem;
+            font-weight: 500;
+            color: var(--text);
+        }
+
+        .tool-desc {
+            font-size: 0.8125rem;
+            color: var(--text-dim);
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Raster Benchmarks</h1>
+    <p class="subtitle">Local benchmark tools for the Raster protocol.</p>
+
+    <div class="section-header">Tools</div>
+    <div class="tool-list">
+        <a class="tool-link" href="scenario-runner/">
+            <span class="tool-name">Scenario Runner</span>
+            <span class="tool-desc">Run a workload through the claim/challenge lifecycle and compare past runs.</span>
+        </a>
+        <a class="tool-link" href="settlement-estimator/">
+            <span class="tool-name">Settlement Estimator</span>
+            <span class="tool-desc">Estimate settlement time, trace size, and DA cost for a Raster program execution.</span>
+        </a>
+    </div>
+
+</body>
+</html>

@@ -1,0 +1,1086 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Raster Scenario Runner</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg: #ffffff;
+            --bg-subtle: #fafafa;
+            --text: #111111;
+            --text-muted: #666666;
+            --text-faint: #999999;
+            --text-dim: #777777;
+            --text-label: #555555;
+            --border: #e5e5e5;
+            --border-input: #d4d4d4;
+            --input-bg: #fafafa;
+            --input-bg-focus: #ffffff;
+            --input-text: #111111;
+            --input-placeholder: #bbbbbb;
+            --badge-bg: #e5e5e5;
+            --badge-text: #555555;
+            --result-bg: #fafafa;
+            --result-border: #e5e5e5;
+            --step-pending-dot: #d4d4d4;
+            --step-running-dot: #888888;
+            --step-done-dot: #333333;
+            --step-error-dot: #cc3333;
+            --step-settled-dot: #2a7a2a;
+            --step-slashed-dot: #8b0000;
+            --outcome-settled-bg: #f0f7f0;
+            --outcome-settled-border: #b8d8b8;
+            --outcome-settled-text: #2a5a2a;
+            --outcome-slashed-bg: #fdf0f0;
+            --outcome-slashed-border: #e8b8b8;
+            --outcome-slashed-text: #7a2020;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #0b0d12;
+                --bg-subtle: #111526;
+                --text: #e9ecf3;
+                --text-muted: #b6bed6;
+                --text-faint: #6b738f;
+                --text-dim: #8a92ad;
+                --text-label: #9ba3be;
+                --border: rgba(255, 255, 255, 0.10);
+                --border-input: rgba(255, 255, 255, 0.14);
+                --input-bg: rgba(255, 255, 255, 0.04);
+                --input-bg-focus: rgba(255, 255, 255, 0.07);
+                --input-text: #e9ecf3;
+                --input-placeholder: #3e4460;
+                --badge-bg: rgba(255, 255, 255, 0.10);
+                --badge-text: #9ba3be;
+                --result-bg: rgba(255, 255, 255, 0.03);
+                --result-border: rgba(255, 255, 255, 0.10);
+                --step-pending-dot: #3e4460;
+                --step-running-dot: #8a92ad;
+                --step-done-dot: #b6bed6;
+                --step-error-dot: #cc5555;
+                --step-settled-dot: #4a9a4a;
+                --step-slashed-dot: #cc4444;
+                --outcome-settled-bg: rgba(74, 154, 74, 0.08);
+                --outcome-settled-border: rgba(74, 154, 74, 0.25);
+                --outcome-settled-text: #7acc7a;
+                --outcome-slashed-bg: rgba(204, 68, 68, 0.08);
+                --outcome-slashed-border: rgba(204, 68, 68, 0.25);
+                --outcome-slashed-text: #e08080;
+            }
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+            padding: 3rem 1.5rem;
+            max-width: 720px;
+            margin: 0 auto;
+        }
+
+        .nav-back {
+            font-size: 0.8125rem;
+            color: var(--text-faint);
+            margin-bottom: 1.5rem;
+            display: block;
+        }
+
+        .nav-back a {
+            color: var(--text-faint);
+            text-decoration: none;
+        }
+
+        .nav-back a:hover {
+            color: var(--text-muted);
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            margin-bottom: 0.25rem;
+        }
+
+        .subtitle {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            margin-bottom: 2.5rem;
+        }
+
+        section {
+            margin-bottom: 2.5rem;
+        }
+
+        .section-header {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-faint);
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        /* Controls */
+        .controls-row {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+
+        select {
+            padding: 0.5rem 0.75rem;
+            font-size: 0.875rem;
+            font-family: inherit;
+            border: 1px solid var(--border-input);
+            border-radius: 4px;
+            background: var(--input-bg);
+            color: var(--input-text);
+            outline: none;
+            cursor: pointer;
+            min-width: 10rem;
+        }
+
+        select:focus {
+            border-color: var(--text);
+            background: var(--input-bg-focus);
+        }
+
+        .scenario-toggle {
+            display: flex;
+            border: 1px solid var(--border-input);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .scenario-toggle button {
+            padding: 0.5rem 1rem;
+            font-size: 0.875rem;
+            font-family: inherit;
+            border: none;
+            background: var(--input-bg);
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .scenario-toggle button:not(:last-child) {
+            border-right: 1px solid var(--border-input);
+        }
+
+        .scenario-toggle button.active {
+            background: var(--text);
+            color: var(--bg);
+        }
+
+        .run-btn {
+            padding: 0.5rem 1.25rem;
+            font-size: 0.875rem;
+            font-weight: 600;
+            font-family: inherit;
+            border: none;
+            border-radius: 4px;
+            background: var(--text);
+            color: var(--bg);
+            cursor: pointer;
+            letter-spacing: 0.01em;
+            transition: opacity 0.15s;
+            margin-left: auto;
+        }
+
+        .run-btn:hover {
+            opacity: 0.85;
+        }
+
+        .run-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        /* Step list */
+        .step-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+        }
+
+        .step {
+            display: grid;
+            grid-template-columns: 1.5rem 1fr;
+            gap: 0 0.875rem;
+            position: relative;
+        }
+
+        .step:not(:last-child)::before {
+            content: '';
+            position: absolute;
+            left: 0.6875rem;
+            top: 1.375rem;
+            bottom: -0.25rem;
+            width: 1px;
+            background: var(--border);
+        }
+
+        .step-dot {
+            width: 0.875rem;
+            height: 0.875rem;
+            border-radius: 50%;
+            background: var(--step-pending-dot);
+            margin-top: 0.3125rem;
+            flex-shrink: 0;
+            transition: background 0.2s;
+            position: relative;
+            z-index: 1;
+        }
+
+        .step-dot.running {
+            background: var(--step-running-dot);
+            box-shadow: 0 0 0 3px rgba(136,136,136,0.15);
+        }
+
+        .step-dot.done { background: var(--step-done-dot); }
+        .step-dot.error { background: var(--step-error-dot); }
+        .step-dot.settled { background: var(--step-settled-dot); }
+        .step-dot.slashed { background: var(--step-slashed-dot); }
+
+        .step-body {
+            padding-bottom: 1.5rem;
+        }
+
+        .step-label {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--text);
+            line-height: 1.4;
+        }
+
+        .step-label.pending { color: var(--text-dim); }
+
+        .step-meta {
+            margin-top: 0.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .meta-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            font-size: 0.8125rem;
+            gap: 1rem;
+        }
+
+        .meta-key {
+            color: var(--text-dim);
+            flex-shrink: 0;
+        }
+
+        .meta-val {
+            font-variant-numeric: tabular-nums;
+            font-weight: 500;
+            color: var(--text);
+            text-align: right;
+            word-break: break-all;
+        }
+
+        .meta-val.mono {
+            font-family: "SFMono-Regular", "Consolas", "Liberation Mono", monospace;
+            font-size: 0.75rem;
+            font-weight: 400;
+        }
+
+        .meta-val .badge {
+            display: inline-block;
+            font-size: 0.6875rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            color: var(--badge-text);
+            background: var(--badge-bg);
+            padding: 0.125rem 0.4rem;
+            border-radius: 3px;
+            margin-left: 0.375rem;
+            vertical-align: middle;
+        }
+
+        /* Outcome block */
+        .outcome-block {
+            margin-top: 0.625rem;
+            padding: 0.75rem 1rem;
+            border-radius: 6px;
+            font-size: 0.875rem;
+        }
+
+        .outcome-block.settled {
+            background: var(--outcome-settled-bg);
+            border: 1px solid var(--outcome-settled-border);
+            color: var(--outcome-settled-text);
+        }
+
+        .outcome-block.slashed {
+            background: var(--outcome-slashed-bg);
+            border: 1px solid var(--outcome-slashed-border);
+            color: var(--outcome-slashed-text);
+        }
+
+        .outcome-label {
+            font-weight: 700;
+            font-size: 0.9375rem;
+            margin-bottom: 0.375rem;
+        }
+
+        /* Summary panel */
+        .results {
+            background: var(--result-bg);
+            border: 1px solid var(--result-border);
+            border-radius: 6px;
+            padding: 1.5rem;
+        }
+
+        .result-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid var(--border);
+            gap: 1rem;
+        }
+
+        .result-row:last-child { border-bottom: none; }
+
+        .result-label {
+            font-size: 0.8125rem;
+            color: var(--text-dim);
+        }
+
+        .result-value {
+            font-size: 0.8125rem;
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+            text-align: right;
+        }
+
+        .result-group-header {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-faint);
+            padding-top: 0.75rem;
+            padding-bottom: 0.25rem;
+            margin-top: 0.25rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .result-group-header:first-child {
+            padding-top: 0;
+            margin-top: 0;
+            border-top: none;
+        }
+
+        /* Past runs list */
+        .runs-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .run-item {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem 1rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            cursor: pointer;
+            background: var(--bg);
+            transition: border-color 0.15s, background 0.15s;
+        }
+
+        .run-item:hover {
+            border-color: var(--border-input);
+            background: var(--bg-subtle);
+        }
+
+        .run-item.selected {
+            border-color: var(--text-dim);
+            background: var(--bg-subtle);
+        }
+
+        .run-item-info {
+            display: flex;
+            flex-direction: column;
+            gap: 0.125rem;
+        }
+
+        .run-item-title {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--text);
+        }
+
+        .run-item-meta {
+            font-size: 0.75rem;
+            color: var(--text-faint);
+        }
+
+        .run-item-outcome {
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.125rem 0.5rem;
+            border-radius: 3px;
+        }
+
+        .run-item-outcome.settled {
+            background: var(--outcome-settled-bg);
+            color: var(--outcome-settled-text);
+            border: 1px solid var(--outcome-settled-border);
+        }
+
+        .run-item-outcome.slashed {
+            background: var(--outcome-slashed-bg);
+            color: var(--outcome-slashed-text);
+            border: 1px solid var(--outcome-slashed-border);
+        }
+
+        .run-actions {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.75rem;
+        }
+
+        .run-actions button {
+            padding: 0.375rem 0.875rem;
+            font-size: 0.8125rem;
+            font-family: inherit;
+            border: 1px solid var(--border-input);
+            border-radius: 4px;
+            background: var(--input-bg);
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: border-color 0.15s, color 0.15s;
+        }
+
+        .run-actions button:hover {
+            border-color: var(--text-dim);
+            color: var(--text);
+        }
+
+        .run-actions button.primary {
+            background: var(--text);
+            color: var(--bg);
+            border-color: transparent;
+        }
+
+        .run-actions button.primary:hover {
+            opacity: 0.85;
+        }
+
+        /* Comparison table */
+        .compare-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8125rem;
+        }
+
+        .compare-table th {
+            text-align: left;
+            padding: 0.5rem 0.75rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--text-faint);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .compare-table th:not(:first-child) {
+            text-align: right;
+        }
+
+        .compare-table td {
+            padding: 0.5rem 0.75rem;
+            border-bottom: 1px solid var(--border);
+            color: var(--text);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .compare-table td:not(:first-child) {
+            text-align: right;
+            font-weight: 500;
+        }
+
+        .compare-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .compare-table td.metric-label {
+            color: var(--text-dim);
+            font-weight: 400;
+        }
+
+        .compare-table td.na {
+            color: var(--text-faint);
+            font-style: italic;
+        }
+
+        .compare-table .group-row td {
+            padding-top: 0.75rem;
+            padding-bottom: 0.25rem;
+            font-size: 0.7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-faint);
+            border-bottom: none;
+        }
+
+        .compare-wrapper {
+            border: 1px solid var(--result-border);
+            border-radius: 6px;
+            overflow: hidden;
+            background: var(--result-bg);
+        }
+
+        .compare-wrapper .compare-table {
+            padding: 0.5rem;
+        }
+
+        .compare-wrapper .compare-table th,
+        .compare-wrapper .compare-table td {
+            padding-left: 1rem;
+            padding-right: 1rem;
+        }
+
+        .empty-state {
+            font-size: 0.875rem;
+            color: var(--text-faint);
+            padding: 1rem 0;
+        }
+
+        .hidden { display: none !important; }
+
+        .divider {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 2.5rem 0;
+        }
+    </style>
+</head>
+<body>
+
+    <span class="nav-back"><a href="../">Raster Benchmarks</a></span>
+
+    <h1>Scenario Runner</h1>
+    <p class="subtitle">Run a workload through the full claim/challenge lifecycle and see performance metrics at each step.</p>
+
+    <section>
+        <div class="section-header">Configure</div>
+        <div class="controls-row">
+            <select id="workloadSelect">
+                <option value="hello-raster">hello-raster</option>
+                <option value="trace-stress">trace-stress</option>
+            </select>
+            <div class="scenario-toggle">
+                <button id="btnHonest" class="active" onclick="setScenario('honest')">Honest</button>
+                <button id="btnDishonest" onclick="setScenario('dishonest')">Dishonest</button>
+            </div>
+            <button class="run-btn" id="runBtn" onclick="startRun()">Run</button>
+        </div>
+    </section>
+
+    <section id="stepSection">
+        <div class="section-header">Lifecycle</div>
+        <div class="step-list" id="stepList"></div>
+    </section>
+
+    <section id="summarySection" class="hidden">
+        <div class="section-header">Summary</div>
+        <div class="results" id="summaryPanel"></div>
+    </section>
+
+    <hr class="divider">
+
+    <section>
+        <div class="section-header">Past Runs</div>
+        <div class="runs-list" id="runsList"></div>
+        <div class="empty-state hidden" id="runsEmpty">No past runs yet. Run a scenario above to record results.</div>
+        <div class="run-actions" id="runActions" style="display:none;">
+            <button id="btnLoadRun" onclick="loadSelectedRun()">View</button>
+            <button id="btnCompareRun" onclick="startCompare()">Compare selected</button>
+        </div>
+    </section>
+
+    <section id="compareSection" class="hidden">
+        <div class="section-header">Comparison</div>
+        <div id="compareContent"></div>
+    </section>
+
+    <script>
+        // ─── State ────────────────────────────────────────────────────────────────
+        let currentScenario = 'honest';
+        let selectedRuns = [];
+
+        // ─── Stub run data ────────────────────────────────────────────────────────
+        const STUB_RUNS = [
+            {
+                id: 'run-001',
+                workload: 'hello-raster',
+                scenario: 'honest',
+                timestamp: '2026-03-05T10:14:02Z',
+                raster_pin: { revision: 'a4770be' },
+                steps: [
+                    { key: 'exec',      label: 'Native execution',    status: 'done',     metrics: { 'Execution time': '38 ms', 'Workload ID': '0xaabbccdd', 'CFS digest': '0x1a2b3c4d' } },
+                    { key: 'trace',     label: 'Trace produced',      status: 'done',     metrics: { 'Trace size': '2.4 KB', 'Tile executions': '12' } },
+                    { key: 'da',        label: 'Trace available (DA)', status: 'done',     metrics: { 'Tx hash': '0xda01...f3a2', 'Gas used': '42,100', 'Calldata size': '2.4 KB' } },
+                    { key: 'claim',     label: 'Claim submitted',     status: 'done',     metrics: { 'Claim ID': '1', 'Tx hash': '0xcl01...b7e1', 'Gas used': '68,400', 'Artifact root': '0x1a2b...3c4d', 'Result root': '0x9f8e...7d6c' } },
+                    { key: 'replay',    label: 'Challenger replay',    status: 'done',     metrics: { 'Replay time': '41 ms', 'Divergence': 'None' } },
+                    { key: 'outcome',   label: 'Settled',             status: 'settled',  outcome: 'settled', metrics: { 'Tx hash': '0xst01...cc90', 'Gas used': '34,200', 'Final state': 'Settled' } }
+                ],
+                summary: {
+                    exec_time_ms: 38,
+                    trace_size_bytes: 2457,
+                    da_gas: 42100,
+                    claim_gas: 68400,
+                    replay_time_ms: 41,
+                    fraud_proof_time_ms: null,
+                    fraud_proof_gas: null,
+                    total_time_ms: 195,
+                    outcome: 'settled'
+                }
+            },
+            {
+                id: 'run-002',
+                workload: 'hello-raster',
+                scenario: 'dishonest',
+                timestamp: '2026-03-05T10:22:48Z',
+                raster_pin: { revision: 'a4770be' },
+                steps: [
+                    { key: 'exec',      label: 'Native execution',    status: 'done',     metrics: { 'Execution time': '39 ms', 'Workload ID': '0xaabbccdd', 'CFS digest': '0x1a2b3c4d' } },
+                    { key: 'trace',     label: 'Trace produced',      status: 'done',     metrics: { 'Trace size': '2.4 KB', 'Tile executions': '12' } },
+                    { key: 'da',        label: 'Trace available (DA)', status: 'done',     metrics: { 'Tx hash': '0xda02...a1b3', 'Gas used': '42,100', 'Calldata size': '2.4 KB' } },
+                    { key: 'claim',     label: 'Claim submitted',     status: 'done',     metrics: { 'Claim ID': '2', 'Tx hash': '0xcl02...3f9d', 'Gas used': '68,400', 'Artifact root': '0xBAD0...0000', 'Result root': '0xBAD1...1111' } },
+                    { key: 'replay',    label: 'Challenger replay',    status: 'done',     metrics: { 'Replay time': '40 ms', 'Divergence': 'Detected' } },
+                    { key: 'outcome',   label: 'Slashed',             status: 'slashed',  outcome: 'slashed', metrics: { 'Fraud proof time': '6 ms', 'Tx hash': '0xch02...8c44', 'Gas used': '81,900', 'Claimer artifact root': '0xBAD0...0000', 'Challenger artifact root': '0x1a2b...3c4d', 'Final state': 'Slashed' } }
+                ],
+                summary: {
+                    exec_time_ms: 39,
+                    trace_size_bytes: 2457,
+                    da_gas: 42100,
+                    claim_gas: 68400,
+                    replay_time_ms: 40,
+                    fraud_proof_time_ms: 6,
+                    fraud_proof_gas: 81900,
+                    total_time_ms: 218,
+                    outcome: 'slashed'
+                }
+            },
+            {
+                id: 'run-003',
+                workload: 'trace-stress',
+                scenario: 'honest',
+                timestamp: '2026-03-05T10:35:11Z',
+                raster_pin: { revision: 'a4770be' },
+                steps: [
+                    { key: 'exec',      label: 'Native execution',    status: 'done',     metrics: { 'Execution time': '4,210 ms', 'Workload ID': '0xddccbbaa', 'CFS digest': '0x5e6f7a8b' } },
+                    { key: 'trace',     label: 'Trace produced',      status: 'done',     metrics: { 'Trace size': '18.7 MB', 'Tile executions': '8,192' } },
+                    { key: 'da',        label: 'Trace available (DA)', status: 'done',     metrics: { 'Tx hash': '0xda03...9fe2', 'Gas used': '1,240,000', 'Calldata size': '18.7 MB' } },
+                    { key: 'claim',     label: 'Claim submitted',     status: 'done',     metrics: { 'Claim ID': '3', 'Tx hash': '0xcl03...77aa', 'Gas used': '68,800', 'Artifact root': '0x5e6f...7a8b', 'Result root': '0xc3d4...e5f6' } },
+                    { key: 'replay',    label: 'Challenger replay',    status: 'done',     metrics: { 'Replay time': '4,380 ms', 'Divergence': 'None' } },
+                    { key: 'outcome',   label: 'Settled',             status: 'settled',  outcome: 'settled', metrics: { 'Tx hash': '0xst03...11bb', 'Gas used': '34,200', 'Final state': 'Settled' } }
+                ],
+                summary: {
+                    exec_time_ms: 4210,
+                    trace_size_bytes: 19607552,
+                    da_gas: 1240000,
+                    claim_gas: 68800,
+                    replay_time_ms: 4380,
+                    fraud_proof_time_ms: null,
+                    fraud_proof_gas: null,
+                    total_time_ms: 14200,
+                    outcome: 'settled'
+                }
+            }
+        ];
+
+        // ─── Scenario toggle ──────────────────────────────────────────────────────
+        function setScenario(s) {
+            currentScenario = s;
+            document.getElementById('btnHonest').classList.toggle('active', s === 'honest');
+            document.getElementById('btnDishonest').classList.toggle('active', s === 'dishonest');
+        }
+
+        // ─── Run simulation ───────────────────────────────────────────────────────
+        function startRun() {
+            const workload = document.getElementById('workloadSelect').value;
+            const scenario = currentScenario;
+
+            // Find matching stub or clone the closest match
+            const template = STUB_RUNS.find(r => r.workload === workload && r.scenario === scenario)
+                || STUB_RUNS.find(r => r.workload === workload)
+                || STUB_RUNS[0];
+
+            const run = JSON.parse(JSON.stringify(template));
+            run.id = 'run-' + Date.now();
+            run.workload = workload;
+            run.scenario = scenario;
+            run.timestamp = new Date().toISOString();
+
+            document.getElementById('runBtn').disabled = true;
+            document.getElementById('summarySection').classList.add('hidden');
+            renderStepsAnimated(run, () => {
+                showSummary(run);
+                persistRun(run);
+                document.getElementById('runBtn').disabled = false;
+            });
+        }
+
+        function renderStepsAnimated(run, onComplete) {
+            const list = document.getElementById('stepList');
+            list.innerHTML = '';
+
+            // Render all steps as pending first
+            run.steps.forEach((step, i) => {
+                list.appendChild(makeStepEl(step, i === 0 ? 'running' : 'pending'));
+            });
+
+            let i = 0;
+            function advanceStep() {
+                if (i >= run.steps.length) {
+                    onComplete();
+                    return;
+                }
+                const step = run.steps[i];
+                const el = list.children[i];
+
+                // Mark current as running
+                el.querySelector('.step-dot').className = 'step-dot running';
+                el.querySelector('.step-label').className = 'step-label';
+
+                setTimeout(() => {
+                    // Mark as done with real data
+                    list.replaceChild(makeStepEl(step, step.status), el);
+                    i++;
+                    if (i < run.steps.length) {
+                        const next = list.children[i];
+                        next.querySelector('.step-dot').className = 'step-dot running';
+                        next.querySelector('.step-label').className = 'step-label';
+                    }
+                    setTimeout(advanceStep, 120);
+                }, 320);
+            }
+            advanceStep();
+        }
+
+        function makeStepEl(step, statusOverride) {
+            const status = statusOverride || step.status;
+
+            const div = document.createElement('div');
+            div.className = 'step';
+
+            const dotClass = status === 'pending' ? 'step-dot' :
+                             status === 'running' ? 'step-dot running' :
+                             status === 'settled' ? 'step-dot settled' :
+                             status === 'slashed' ? 'step-dot slashed' :
+                             status === 'error'   ? 'step-dot error' :
+                                                    'step-dot done';
+
+            const labelClass = status === 'pending' ? 'step-label pending' : 'step-label';
+
+            let metaHtml = '';
+            if (status !== 'pending' && step.metrics) {
+                metaHtml = '<div class="step-meta">';
+                for (const [k, v] of Object.entries(step.metrics)) {
+                    const isMono = v.startsWith('0x');
+                    metaHtml += `<div class="meta-row">
+                        <span class="meta-key">${k}</span>
+                        <span class="meta-val${isMono ? ' mono' : ''}">${v}</span>
+                    </div>`;
+                }
+                metaHtml += '</div>';
+            }
+
+            let outcomeHtml = '';
+            if (status !== 'pending' && step.outcome) {
+                if (step.outcome === 'settled') {
+                    outcomeHtml = `<div class="outcome-block settled"><div class="outcome-label">Settled</div>Claim verified. No divergence detected. Chain state updated.</div>`;
+                } else if (step.outcome === 'slashed') {
+                    outcomeHtml = `<div class="outcome-block slashed"><div class="outcome-label">Slashed</div>Fraud detected. Claimer claim invalidated on-chain.</div>`;
+                }
+            }
+
+            div.innerHTML = `
+                <div class="${dotClass}"></div>
+                <div class="step-body">
+                    <div class="${labelClass}">${step.label}</div>
+                    ${metaHtml}
+                    ${outcomeHtml}
+                </div>
+            `;
+            return div;
+        }
+
+        // ─── Summary panel ────────────────────────────────────────────────────────
+        function showSummary(run) {
+            const s = run.summary;
+            const sec = document.getElementById('summarySection');
+            const panel = document.getElementById('summaryPanel');
+            sec.classList.remove('hidden');
+
+            const fraudRows = (s.fraud_proof_time_ms !== null) ? `
+                <div class="result-row">
+                    <span class="result-label">Fraud proof generation</span>
+                    <span class="result-value">${formatDuration(s.fraud_proof_time_ms / 1000)}</span>
+                </div>
+                <div class="result-row">
+                    <span class="result-label">Fraud proof gas</span>
+                    <span class="result-value">${s.fraud_proof_gas.toLocaleString('en-US')}</span>
+                </div>
+            ` : '';
+
+            panel.innerHTML = `
+                <div class="result-group-header">Claimer</div>
+                <div class="result-row">
+                    <span class="result-label">Native execution time</span>
+                    <span class="result-value">${formatDuration(s.exec_time_ms / 1000)}</span>
+                </div>
+                <div class="result-row">
+                    <span class="result-label">Trace size</span>
+                    <span class="result-value">${formatBytes(s.trace_size_bytes)}</span>
+                </div>
+                <div class="result-row">
+                    <span class="result-label">DA availability gas</span>
+                    <span class="result-value">${s.da_gas.toLocaleString('en-US')}</span>
+                </div>
+                <div class="result-row">
+                    <span class="result-label">Claim submission gas</span>
+                    <span class="result-value">${s.claim_gas.toLocaleString('en-US')}</span>
+                </div>
+                <div class="result-group-header">Challenger</div>
+                <div class="result-row">
+                    <span class="result-label">Native replay time</span>
+                    <span class="result-value">${formatDuration(s.replay_time_ms / 1000)}</span>
+                </div>
+                ${fraudRows}
+                <div class="result-group-header">Overall</div>
+                <div class="result-row">
+                    <span class="result-label">Total wall-clock time</span>
+                    <span class="result-value">${formatDuration(s.total_time_ms / 1000)}</span>
+                </div>
+                <div class="result-row">
+                    <span class="result-label">Outcome</span>
+                    <span class="result-value">${s.outcome.charAt(0).toUpperCase() + s.outcome.slice(1)}</span>
+                </div>
+            `;
+        }
+
+        // ─── Persistence (localStorage) ───────────────────────────────────────────
+        function loadRuns() {
+            try {
+                return JSON.parse(localStorage.getItem('raster_runs') || '[]');
+            } catch { return []; }
+        }
+
+        function saveRuns(runs) {
+            localStorage.setItem('raster_runs', JSON.stringify(runs));
+        }
+
+        function persistRun(run) {
+            const runs = loadRuns();
+            runs.unshift(run);
+            saveRuns(runs);
+            renderRunsList();
+        }
+
+        // ─── Runs list ────────────────────────────────────────────────────────────
+        function renderRunsList() {
+            const stored = loadRuns();
+            const allRuns = [...stored];
+
+            // Seed with stubs if nothing stored yet
+            const list = allRuns.length > 0 ? allRuns : STUB_RUNS;
+
+            const container = document.getElementById('runsList');
+            const empty = document.getElementById('runsEmpty');
+            const actions = document.getElementById('runActions');
+
+            if (list.length === 0) {
+                container.innerHTML = '';
+                empty.classList.remove('hidden');
+                actions.style.display = 'none';
+                return;
+            }
+
+            empty.classList.add('hidden');
+            actions.style.display = 'flex';
+            container.innerHTML = '';
+
+            list.forEach(run => {
+                const item = document.createElement('div');
+                item.className = 'run-item' + (selectedRuns.includes(run.id) ? ' selected' : '');
+                item.dataset.runId = run.id;
+                item.onclick = () => toggleRunSelection(run.id);
+
+                const ts = new Date(run.timestamp).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                const pin = run.raster_pin ? run.raster_pin.revision.slice(0, 7) : '—';
+
+                item.innerHTML = `
+                    <div class="run-item-info">
+                        <span class="run-item-title">${run.workload} &mdash; ${run.scenario}</span>
+                        <span class="run-item-meta">${ts} &middot; pin ${pin} &middot; ${formatDuration(run.summary.total_time_ms / 1000)}</span>
+                    </div>
+                    <span class="run-item-outcome ${run.summary.outcome}">${run.summary.outcome.charAt(0).toUpperCase() + run.summary.outcome.slice(1)}</span>
+                `;
+                container.appendChild(item);
+            });
+        }
+
+        function toggleRunSelection(runId) {
+            const idx = selectedRuns.indexOf(runId);
+            if (idx >= 0) {
+                selectedRuns.splice(idx, 1);
+            } else {
+                if (selectedRuns.length >= 2) selectedRuns.shift();
+                selectedRuns.push(runId);
+            }
+            renderRunsList();
+
+            if (selectedRuns.length === 1) {
+                // Load into step view
+                const stored = loadRuns();
+                const all = stored.length > 0 ? stored : STUB_RUNS;
+                const run = all.find(r => r.id === selectedRuns[0]);
+                if (run) loadRunIntoView(run);
+            }
+        }
+
+        function loadSelectedRun() {
+            const stored = loadRuns();
+            const all = stored.length > 0 ? stored : STUB_RUNS;
+            if (selectedRuns.length < 1) return;
+            const run = all.find(r => r.id === selectedRuns[0]);
+            if (run) loadRunIntoView(run);
+        }
+
+        function loadRunIntoView(run) {
+            const list = document.getElementById('stepList');
+            list.innerHTML = '';
+            run.steps.forEach(step => {
+                list.appendChild(makeStepEl(step, step.status));
+            });
+            showSummary(run);
+            document.getElementById('stepSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        // ─── Comparison ───────────────────────────────────────────────────────────
+        function startCompare() {
+            if (selectedRuns.length < 2) {
+                document.getElementById('compareContent').innerHTML = '<p style="font-size:0.875rem;color:var(--text-faint);padding:0.75rem 0;">Select two runs from the list above to compare.</p>';
+                document.getElementById('compareSection').classList.remove('hidden');
+                document.getElementById('compareSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+                return;
+            }
+            const stored = loadRuns();
+            const all = stored.length > 0 ? stored : STUB_RUNS;
+            const [a, b] = selectedRuns.map(id => all.find(r => r.id === id));
+            if (!a || !b) return;
+            renderComparison(a, b);
+        }
+
+        function renderComparison(a, b) {
+            const sec = document.getElementById('compareSection');
+            const content = document.getElementById('compareContent');
+            sec.classList.remove('hidden');
+
+            function cell(val) {
+                if (val === null || val === undefined) return `<td class="na">n/a</td>`;
+                return `<td>${val}</td>`;
+            }
+
+            const aLabel = `${a.workload} / ${a.scenario}`;
+            const bLabel = `${b.workload} / ${b.scenario}`;
+
+            const rows = [
+                { group: 'Claimer' },
+                { label: 'Native execution time', a: formatDuration(a.summary.exec_time_ms / 1000), b: formatDuration(b.summary.exec_time_ms / 1000) },
+                { label: 'Trace size', a: formatBytes(a.summary.trace_size_bytes), b: formatBytes(b.summary.trace_size_bytes) },
+                { label: 'DA availability gas', a: a.summary.da_gas.toLocaleString('en-US'), b: b.summary.da_gas.toLocaleString('en-US') },
+                { label: 'Claim submission gas', a: a.summary.claim_gas.toLocaleString('en-US'), b: b.summary.claim_gas.toLocaleString('en-US') },
+                { group: 'Challenger' },
+                { label: 'Native replay time', a: formatDuration(a.summary.replay_time_ms / 1000), b: formatDuration(b.summary.replay_time_ms / 1000) },
+                { label: 'Fraud proof time', a: a.summary.fraud_proof_time_ms !== null ? formatDuration(a.summary.fraud_proof_time_ms / 1000) : null, b: b.summary.fraud_proof_time_ms !== null ? formatDuration(b.summary.fraud_proof_time_ms / 1000) : null },
+                { label: 'Fraud proof gas', a: a.summary.fraud_proof_gas !== null ? a.summary.fraud_proof_gas.toLocaleString('en-US') : null, b: b.summary.fraud_proof_gas !== null ? b.summary.fraud_proof_gas.toLocaleString('en-US') : null },
+                { group: 'Overall' },
+                { label: 'Total wall-clock time', a: formatDuration(a.summary.total_time_ms / 1000), b: formatDuration(b.summary.total_time_ms / 1000) },
+                { label: 'Outcome', a: a.summary.outcome, b: b.summary.outcome },
+            ];
+
+            let tbody = '';
+            rows.forEach(row => {
+                if (row.group) {
+                    tbody += `<tr class="group-row"><td colspan="3">${row.group}</td></tr>`;
+                } else {
+                    tbody += `<tr><td class="metric-label">${row.label}</td>${cell(row.a)}${cell(row.b)}</tr>`;
+                }
+            });
+
+            content.innerHTML = `
+                <div class="compare-wrapper">
+                    <table class="compare-table">
+                        <thead><tr>
+                            <th>Metric</th>
+                            <th>${aLabel}</th>
+                            <th>${bLabel}</th>
+                        </tr></thead>
+                        <tbody>${tbody}</tbody>
+                    </table>
+                </div>
+            `;
+            sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        // ─── Formatters ───────────────────────────────────────────────────────────
+        function formatBytes(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+            if (bytes < 1073741824) return (bytes / 1048576).toFixed(2) + ' MB';
+            return (bytes / 1073741824).toFixed(2) + ' GB';
+        }
+
+        function formatDuration(seconds) {
+            if (typeof seconds !== 'number' || isNaN(seconds) || seconds < 0) return '\u2014';
+            if (seconds < 0.001) return (seconds * 1000).toFixed(1) + ' \u03bcs';
+            if (seconds < 1) return (seconds * 1000).toFixed(0) + ' ms';
+            if (seconds < 60) return seconds.toFixed(2) + ' s';
+            const mins = seconds / 60;
+            if (mins < 60) return mins.toFixed(1) + ' min';
+            const hours = mins / 60;
+            if (hours < 24) return hours.toFixed(1) + ' hrs';
+            return (hours / 24).toFixed(1) + ' days';
+        }
+
+        // ─── Init ─────────────────────────────────────────────────────────────────
+        function init() {
+            // Show initial stub run in the step list
+            const initialRun = STUB_RUNS[0];
+            const list = document.getElementById('stepList');
+            initialRun.steps.forEach(step => {
+                list.appendChild(makeStepEl(step, step.status));
+            });
+            showSummary(initialRun);
+            renderRunsList();
+        }
+
+        init();
+    </script>
+
+</body>
+</html>

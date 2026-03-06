@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Raster Settlement Estimator</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg: #ffffff;
+            --bg-subtle: #fafafa;
+            --text: #111111;
+            --text-muted: #666666;
+            --text-faint: #999999;
+            --text-dim: #777777;
+            --text-label: #555555;
+            --border: #e5e5e5;
+            --border-input: #d4d4d4;
+            --input-bg: #fafafa;
+            --input-bg-focus: #ffffff;
+            --input-text: #111111;
+            --input-placeholder: #bbbbbb;
+            --badge-bg: #e5e5e5;
+            --badge-text: #555555;
+            --result-bg: #fafafa;
+            --result-border: #e5e5e5;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #0b0d12;
+                --bg-subtle: #111526;
+                --text: #e9ecf3;
+                --text-muted: #b6bed6;
+                --text-faint: #6b738f;
+                --text-dim: #8a92ad;
+                --text-label: #9ba3be;
+                --border: rgba(255, 255, 255, 0.10);
+                --border-input: rgba(255, 255, 255, 0.14);
+                --input-bg: rgba(255, 255, 255, 0.04);
+                --input-bg-focus: rgba(255, 255, 255, 0.07);
+                --input-text: #e9ecf3;
+                --input-placeholder: #3e4460;
+                --badge-bg: rgba(255, 255, 255, 0.10);
+                --badge-text: #9ba3be;
+                --result-bg: rgba(255, 255, 255, 0.03);
+                --result-border: rgba(255, 255, 255, 0.10);
+            }
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+            padding: 3rem 1.5rem;
+            max-width: 720px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            margin-bottom: 0.25rem;
+        }
+
+        .subtitle {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            margin-bottom: 2.5rem;
+        }
+
+        section {
+            margin-bottom: 2.5rem;
+        }
+
+        .section-header {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-faint);
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .section-note {
+            font-size: 0.8125rem;
+            color: var(--text-dim);
+            margin-bottom: 1rem;
+        }
+
+        .input-group {
+            margin-bottom: 1.25rem;
+        }
+
+        .input-group.wide {
+            display: grid;
+            grid-template-columns: 1fr auto 10rem;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .input-group.wide input {
+            text-align: right;
+        }
+
+        label {
+            display: block;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            margin-bottom: 0.25rem;
+        }
+
+        .input-group.wide label {
+            margin-bottom: 0;
+            color: var(--text);
+        }
+
+        label .hint {
+            font-weight: 400;
+            color: var(--text-faint);
+        }
+
+        input[type="number"] {
+            width: 100%;
+            padding: 0.5rem 0.625rem;
+            font-size: 0.875rem;
+            font-family: inherit;
+            border: 1px solid var(--border-input);
+            border-radius: 4px;
+            background: var(--input-bg);
+            color: var(--input-text);
+            outline: none;
+            transition: border-color 0.15s, background 0.15s;
+            -moz-appearance: textfield;
+        }
+
+        input[type="number"]::-webkit-inner-spin-button,
+        input[type="number"]::-webkit-outer-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+
+        input[type="number"]:focus {
+            border-color: var(--text);
+            background: var(--input-bg-focus);
+        }
+
+        input[type="number"]::placeholder {
+            color: var(--input-placeholder);
+        }
+
+        .divider {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 2.5rem 0;
+        }
+
+        .results {
+            background: var(--result-bg);
+            border: 1px solid var(--result-border);
+            border-radius: 6px;
+            padding: 1.5rem;
+        }
+
+        .result-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            padding: 0.625rem 0;
+        }
+
+        .result-row:last-child {
+            border-bottom: none;
+        }
+
+        .result-label {
+            font-size: 0.8125rem;
+            color: var(--text);
+        }
+
+        .result-value {
+            font-size: 0.8125rem;
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .input-with-badge {
+            position: relative;
+        }
+
+        .input-with-badge input {
+            padding-right: 5.5rem;
+        }
+
+        .badge {
+            position: absolute;
+            right: 0.5rem;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 0.6875rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            color: var(--badge-text);
+            background: var(--badge-bg);
+            padding: 0.125rem 0.5rem;
+            border-radius: 3px;
+            pointer-events: none;
+            white-space: nowrap;
+            transition: opacity 0.15s;
+        }
+
+        .badge.hidden {
+            opacity: 0;
+        }
+
+        .sum-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.625rem;
+        }
+
+        .sum-row {
+            display: grid;
+            grid-template-columns: 1fr auto 6rem;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .sum-row label {
+            margin-bottom: 0;
+        }
+
+        .sum-row input {
+            text-align: right;
+        }
+
+        .sum-operator {
+            font-size: 0.75rem;
+            color: var(--border-input);
+            text-align: center;
+            width: 1rem;
+        }
+
+        .sum-total {
+            display: grid;
+            grid-template-columns: 1fr auto 6rem;
+            align-items: center;
+            gap: 0.75rem;
+            padding-top: 0.625rem;
+            border-top: 1px solid var(--border);
+            margin-top: 0.25rem;
+        }
+
+        .sum-total-label {
+            font-size: 0.8125rem;
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .sum-total-value {
+            font-size: 0.875rem;
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+            text-align: right;
+            color: var(--text);
+        }
+    </style>
+</head>
+<body>
+
+    <a href="../" style="display:block;font-size:0.8125rem;color:var(--text-faint);text-decoration:none;margin-bottom:1.5rem;">Raster Benchmarks</a>
+
+    <h1>Raster Settlement Estimator</h1>
+    <p class="subtitle">Estimate settlement time, trace size, and DA cost for a Raster program execution.</p>
+
+    <section>
+        <div class="section-header">Program Profile</div>
+
+        <div class="input-group wide">
+            <label>Total zkVM Cycles</label>
+            <span class="sum-operator"></span>
+            <div class="input-with-badge">
+                <input type="number" id="totalCycles" placeholder="e.g. 500000000" min="1" value="1000000000000">
+                <span class="badge hidden" id="cyclesBadge"></span>
+            </div>
+        </div>
+
+        <div class="result-row" style="padding: 0.25rem 0 1rem 0;">
+            <span class="result-label">Equivalent native cycles</span>
+            <span class="result-value" id="outNativeCycles">&mdash;</span>
+        </div>
+
+        <div class="input-group wide">
+            <label>Tile Executions</label>
+            <span class="sum-operator"></span>
+            <div class="input-with-badge">
+                <input type="number" id="tileCount" placeholder="e.g. 10000" min="1" value="1000000">
+                <span class="badge hidden" id="tileCountBadge"></span>
+            </div>
+        </div>
+
+        <div class="result-row" style="padding: 0.25rem 0;">
+            <span class="result-label">Average ZKVM cycles per trace item</span>
+            <span class="result-value" id="outAvgCycles">&mdash;</span>
+        </div>
+    </section>
+
+    <section>
+        <div class="section-header">Challenge Window</div>
+        <div class="sum-group">
+            <div class="sum-row">
+                <label>Raster Initial Execution Time <span class="hint">(hrs)</span></label>
+                <span class="sum-operator"></span>
+                <input type="number" id="rasterExecHours" placeholder="e.g. 0.5" min="0" step="0.5" value="0.1">
+            </div>
+            <div class="sum-row">
+                <label>Replay Time <span class="hint">(hrs)</span></label>
+                <span class="sum-operator"></span>
+                <input type="number" id="replayHours" placeholder="0" min="0" step="0.5" value="1">
+            </div>
+            <div class="sum-row">
+                <label>Fraud Proof Overhead <span class="hint">(hrs)</span></label>
+                <span class="sum-operator">+</span>
+                <input type="number" id="overheadHours" placeholder="0" min="0" step="0.5" value="1">
+            </div>
+            <div class="sum-row">
+                <label>Buffer <span class="hint">(hrs)</span></label>
+                <span class="sum-operator">+</span>
+                <input type="number" id="bufferHours" placeholder="0" min="0" step="0.5" value="10">
+            </div>
+            <div class="sum-total">
+                <span class="sum-total-label">Challenge Window</span>
+                <span class="sum-operator">=</span>
+                <span class="sum-total-value" id="totalChallengeHours">&mdash;</span>
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <div class="section-header">Prover Speed</div>
+        <div class="input-group wide">
+            <label>zkVM Prover Throughput <span class="hint">(cycles/sec)</span></label>
+            <span class="sum-operator"></span>
+            <div class="input-with-badge">
+                <input type="number" id="proverSpeed" placeholder="1000000" min="1" value="1000000">
+                <span class="badge" id="hzBadge"></span>
+            </div>
+        </div>
+        </div>
+
+        <div class="result-row" style="padding: 0.25rem 0;">
+            <span class="result-label">Max ZKVM Proving Cycles Per Window</span>
+            <span class="result-value" id="outCyclesPerWindow">&mdash;</span>
+        </div>
+        <div class="result-row" style="padding: 0.25rem 0;">
+            <span class="result-label">Max ZKVM Replay Cycles Per Window</span>
+            <span class="result-value" id="outReplayCycles">&mdash;</span>
+        </div>
+        <div class="result-row" style="padding: 0.25rem 0;">
+            <span class="result-label">Max tile executions per window</span>
+            <span class="result-value" id="outTilesPerWindow">&mdash;</span>
+        </div>
+    </section>
+
+    <section>
+        <div class="section-header">Security</div>
+        <div class="input-group wide">
+            <label>Fault Proof Anchor Bits</label>
+            <span class="sum-operator"></span>
+            <input type="number" id="bindingBits" placeholder="256" min="1" value="256">
+        </div>
+    </section>
+
+    <section>
+        <div class="section-header">Results</div>
+
+        <div class="results">
+            <div class="result-row">
+                <span class="result-label">Required replays per challenge</span>
+                <span class="result-value" id="outRequiredReplays">&mdash;</span>
+            </div>
+            <div class="result-row">
+                <span class="result-label">Bits per trace item</span>
+                <span class="result-value" id="outBitsPerItem">&mdash;</span>
+            </div>
+            <div class="result-row">
+                <span class="result-label">Trace size</span>
+                <span class="result-value" id="outTraceSize">&mdash;</span>
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <div class="section-header">zkVM Comparison</div>
+
+        <div class="results">
+            <div class="result-row">
+                <span class="result-label">Raster time to finalization</span>
+                <span class="result-value" id="outRasterFinalization">&mdash;</span>
+            </div>
+            <div class="result-row">
+                <span class="result-label">Raster effective zkVM execution speed</span>
+                <span class="result-value" id="outRasterSpeed">&mdash;</span>
+            </div>
+            <div class="result-row">
+                <span class="result-label">Raster effective native execution speed</span>
+                <span class="result-value" id="outRasterNativeSpeed">&mdash;</span>
+            </div>
+            <div class="result-row">
+                <span class="result-label">zkVM time to finalization</span>
+                <span class="result-value" id="outZkvmFinalization">&mdash;</span>
+            </div>
+            <div class="result-row">
+                <span class="result-label">zkVM effective execution speed</span>
+                <span class="result-value" id="outZkvmSpeed">&mdash;</span>
+            </div>
+            <div class="result-row">
+                <span class="result-label">zkVM effective native execution speed</span>
+                <span class="result-value" id="outZkvmNativeSpeed">&mdash;</span>
+            </div>
+        </div>
+    </section>
+
+    <script>
+        const ids = ['totalCycles', 'tileCount', 'proverSpeed', 'rasterExecHours', 'replayHours', 'overheadHours', 'bufferHours', 'bindingBits'];
+        ids.forEach(id => document.getElementById(id).addEventListener('input', compute));
+
+        function getChallengeHours() {
+            const rasterExec = parseFloat(document.getElementById('rasterExecHours').value) || 0;
+            const replay = parseFloat(document.getElementById('replayHours').value) || 0;
+            const overhead = parseFloat(document.getElementById('overheadHours').value) || 0;
+            const buffer = parseFloat(document.getElementById('bufferHours').value) || 0;
+            return rasterExec + replay + overhead + buffer;
+        }
+
+        function compute() {
+            const totalCycles = parseFloat(document.getElementById('totalCycles').value);
+            const tileCount = parseFloat(document.getElementById('tileCount').value);
+            const proverSpeed = parseFloat(document.getElementById('proverSpeed').value);
+            const challengeHours = getChallengeHours();
+
+            updateHzBadge(proverSpeed);
+            updateMagnitudeBadge('cyclesBadge', totalCycles);
+            updateMagnitudeBadge('tileCountBadge', tileCount);
+
+            // equivalent native cycles
+            const nativeCycles = totalCycles > 0 ? Math.round(totalCycles / 100) : 0;
+            if (nativeCycles > 0) {
+                document.getElementById('outNativeCycles').textContent = formatNumberWithMagnitude(nativeCycles);
+            } else {
+                document.getElementById('outNativeCycles').textContent = '\u2014';
+            }
+
+            // update total display
+            if (challengeHours > 0) {
+                document.getElementById('totalChallengeHours').textContent = challengeHours + ' hrs';
+            } else {
+                document.getElementById('totalChallengeHours').textContent = '\u2014';
+            }
+
+            const replayHours = parseFloat(document.getElementById('replayHours').value) || 0;
+
+            // zkVM cycles per window
+            let cyclesPerWindow = null;
+            if (proverSpeed > 0 && replayHours > 0) {
+                cyclesPerWindow = replayHours * 3600 * proverSpeed;
+                document.getElementById('outCyclesPerWindow').textContent = formatNumber(cyclesPerWindow);
+            } else {
+                document.getElementById('outCyclesPerWindow').textContent = '\u2014';
+            }
+
+            // avg cycles per trace item
+            let avgCycles = null;
+            if (totalCycles > 0 && tileCount > 0) {
+                avgCycles = totalCycles / tileCount;
+                document.getElementById('outAvgCycles').textContent = formatNumber(Math.round(avgCycles));
+            } else {
+                document.getElementById('outAvgCycles').textContent = '\u2014';
+            }
+
+            // replay cycles per window (half of proving cycles)
+            let replayCycles = null;
+            if (cyclesPerWindow) {
+                replayCycles = Math.floor(cyclesPerWindow / 2);
+                document.getElementById('outReplayCycles').textContent = formatNumber(replayCycles);
+            } else {
+                document.getElementById('outReplayCycles').textContent = '\u2014';
+            }
+
+            // avg tile executions per window
+            let tilesPerWindow = null;
+            if (replayCycles && avgCycles) {
+                tilesPerWindow = Math.floor(replayCycles / avgCycles);
+                document.getElementById('outTilesPerWindow').textContent = formatNumber(tilesPerWindow);
+            } else {
+                document.getElementById('outTilesPerWindow').textContent = '\u2014';
+            }
+
+            // required replays per challenge (smaller of 256 or max tile executions per window)
+            let requiredReplays = null;
+            if (tilesPerWindow && tilesPerWindow > 0) {
+                requiredReplays = Math.min(256, tilesPerWindow);
+                document.getElementById('outRequiredReplays').textContent = formatNumber(requiredReplays);
+            } else {
+                document.getElementById('outRequiredReplays').textContent = '\u2014';
+            }
+
+            // bits per trace item
+            let bitsPerItem = null;
+            const bindingBits = parseInt(document.getElementById('bindingBits').value) || 256;
+            if (requiredReplays && requiredReplays > 0) {
+                bitsPerItem = Math.ceil(bindingBits / requiredReplays);
+                document.getElementById('outBitsPerItem').textContent = bitsPerItem + ' bit' + (bitsPerItem > 1 ? 's' : '');
+            } else {
+                document.getElementById('outBitsPerItem').textContent = '\u2014';
+            }
+
+            // trace size
+            if (tileCount > 0 && bitsPerItem) {
+                const traceBits = tileCount * bitsPerItem;
+                const traceBytes = traceBits / 8;
+                document.getElementById('outTraceSize').textContent = formatNumber(traceBits) + ' bits (' + formatBytes(traceBytes) + ')';
+            } else {
+                document.getElementById('outTraceSize').textContent = '\u2014';
+            }
+
+            // Raster time to finalization (challengeHours already includes rasterExecHours)
+            if (challengeHours > 0) {
+                document.getElementById('outRasterFinalization').textContent = formatDuration(challengeHours * 3600);
+            } else {
+                document.getElementById('outRasterFinalization').textContent = '\u2014';
+            }
+
+            // Raster effective zkVM execution speed
+            let rasterSpeed = null;
+            if (totalCycles > 0 && challengeHours > 0) {
+                rasterSpeed = totalCycles / (challengeHours * 3600);
+                document.getElementById('outRasterSpeed').textContent = formatHz(rasterSpeed);
+            } else {
+                document.getElementById('outRasterSpeed').textContent = '\u2014';
+            }
+
+            // Raster effective native execution speed (zkVM cycles ~100x native cycles)
+            if (rasterSpeed) {
+                document.getElementById('outRasterNativeSpeed').textContent = formatHz(rasterSpeed / 100);
+            } else {
+                document.getElementById('outRasterNativeSpeed').textContent = '\u2014';
+            }
+
+            // zkVM time to finalization
+            if (totalCycles > 0 && proverSpeed > 0) {
+                const zkvmSeconds = totalCycles / proverSpeed;
+                document.getElementById('outZkvmFinalization').textContent = formatDuration(zkvmSeconds);
+            } else {
+                document.getElementById('outZkvmFinalization').textContent = '\u2014';
+            }
+
+            // zkVM effective execution speed (same as prover speed since it's continuous)
+            if (proverSpeed > 0) {
+                document.getElementById('outZkvmSpeed').textContent = formatHz(proverSpeed);
+            } else {
+                document.getElementById('outZkvmSpeed').textContent = '\u2014';
+            }
+
+            // zkVM effective native execution speed (zkVM cycles ~100x native cycles)
+            if (proverSpeed > 0) {
+                document.getElementById('outZkvmNativeSpeed').textContent = formatHz(proverSpeed / 100);
+            } else {
+                document.getElementById('outZkvmNativeSpeed').textContent = '\u2014';
+            }
+        }
+
+        function updateHzBadge(cps) {
+            const badge = document.getElementById('hzBadge');
+            if (!cps || cps <= 0) {
+                badge.classList.add('hidden');
+                return;
+            }
+            badge.classList.remove('hidden');
+            if (cps >= 1e9) {
+                badge.textContent = (cps / 1e9).toFixed(cps % 1e9 === 0 ? 0 : 1) + ' GHz';
+            } else if (cps >= 1e6) {
+                badge.textContent = (cps / 1e6).toFixed(cps % 1e6 === 0 ? 0 : 1) + ' MHz';
+            } else if (cps >= 1e3) {
+                badge.textContent = (cps / 1e3).toFixed(cps % 1e3 === 0 ? 0 : 1) + ' kHz';
+            } else {
+                badge.textContent = cps + ' Hz';
+            }
+        }
+
+        // initialize on load
+        updateHzBadge(1000000);
+        updateMagnitudeBadge('cyclesBadge', 1000000000000);
+        updateMagnitudeBadge('tileCountBadge', 1000000);
+        compute();
+
+        function updateMagnitudeBadge(id, value) {
+            const badge = document.getElementById(id);
+            if (!value || value <= 0) {
+                badge.classList.add('hidden');
+                return;
+            }
+            badge.classList.remove('hidden');
+            if (value >= 1e12) {
+                badge.textContent = (value / 1e12).toFixed(value % 1e12 === 0 ? 0 : 1) + 'T';
+            } else if (value >= 1e9) {
+                badge.textContent = (value / 1e9).toFixed(value % 1e9 === 0 ? 0 : 1) + 'B';
+            } else if (value >= 1e6) {
+                badge.textContent = (value / 1e6).toFixed(value % 1e6 === 0 ? 0 : 1) + 'M';
+            } else if (value >= 1e3) {
+                badge.textContent = (value / 1e3).toFixed(value % 1e3 === 0 ? 0 : 1) + 'K';
+            } else {
+                badge.classList.add('hidden');
+            }
+        }
+
+        function formatHz(cps) {
+            if (typeof cps !== 'number' || isNaN(cps) || cps <= 0) return '\u2014';
+            if (cps >= 1e9) {
+                return (cps / 1e9).toFixed(cps % 1e9 === 0 ? 0 : 1) + ' GHz';
+            } else if (cps >= 1e6) {
+                return (cps / 1e6).toFixed(cps % 1e6 === 0 ? 0 : 1) + ' MHz';
+            } else if (cps >= 1e3) {
+                return (cps / 1e3).toFixed(cps % 1e3 === 0 ? 0 : 1) + ' kHz';
+            } else {
+                return cps + ' Hz';
+            }
+        }
+
+        function formatNumber(n) {
+            if (typeof n !== 'number' || isNaN(n)) return '\u2014';
+            return n.toLocaleString('en-US');
+        }
+
+        function formatNumberWithMagnitude(n) {
+            if (typeof n !== 'number' || isNaN(n)) return '\u2014';
+            let suffix = '';
+            if (n >= 1e12) suffix = ' (' + (n / 1e12).toFixed(n % 1e12 === 0 ? 0 : 1) + 'T)';
+            else if (n >= 1e9) suffix = ' (' + (n / 1e9).toFixed(n % 1e9 === 0 ? 0 : 1) + 'B)';
+            else if (n >= 1e6) suffix = ' (' + (n / 1e6).toFixed(n % 1e6 === 0 ? 0 : 1) + 'M)';
+            else if (n >= 1e3) suffix = ' (' + (n / 1e3).toFixed(n % 1e3 === 0 ? 0 : 1) + 'K)';
+            return n.toLocaleString('en-US') + suffix;
+        }
+
+        function formatBytes(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+            if (bytes < 1073741824) return (bytes / 1048576).toFixed(2) + ' MB';
+            return (bytes / 1073741824).toFixed(2) + ' GB';
+        }
+
+        function formatDuration(seconds) {
+            if (typeof seconds !== 'number' || isNaN(seconds) || seconds < 0) return '\u2014';
+            const hours = seconds / 3600;
+            const days = hours / 24;
+            const years = days / 365;
+
+            if (years >= 1) {
+                return hours.toFixed(1) + ' hrs (' + years.toFixed(1) + ' years)';
+            } else if (days >= 1) {
+                return hours.toFixed(1) + ' hrs (' + days.toFixed(1) + ' days)';
+            } else if (hours >= 1) {
+                return hours.toFixed(1) + ' hrs';
+            } else if (seconds >= 60) {
+                return (seconds / 60).toFixed(1) + ' min';
+            } else {
+                return seconds.toFixed(1) + ' sec';
+            }
+        }
+    </script>
+
+</body>
+</html>

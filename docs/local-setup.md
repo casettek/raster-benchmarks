@@ -29,8 +29,11 @@ This repo is local-first. Phase 0 requires deterministic local prerequisites bef
 5. Start local chain:
    - `anvil`
 6. In another shell, run starter app entrypoints:
-   - `cargo run --manifest-path apps/claimer/Cargo.toml`
-   - `cargo run --manifest-path apps/challenger/Cargo.toml`
+    - `cargo run --manifest-path apps/claimer/Cargo.toml`
+    - `cargo run --manifest-path apps/challenger/Cargo.toml`
+7. To serve the web interfaces locally:
+    - `cargo run --manifest-path apps/web-server/Cargo.toml`
+    - Then open: http://localhost:8010
 
 ## Reproducibility requirement
 

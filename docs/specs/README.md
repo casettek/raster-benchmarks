@@ -33,6 +33,7 @@ Current active top-level directories in this lean baseline:
 - `contracts/`: benchmark-local smart contracts plus Foundry build/test/deploy scaffolding.
 - `docs/`: canonical specs and setup contracts.
 - `runs/`: local run-output landing area.
+- `web/`: zero-dependency static HTML tools (open directly in a browser, no build step required).
 
 Additional directories for workloads/scenarios/orchestration/metrics will be reintroduced only when they contain non-placeholder implementation.
 
