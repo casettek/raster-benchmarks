@@ -26,14 +26,29 @@ This repo is local-first. Phase 0 requires deterministic local prerequisites bef
    - `forge --version`
 4. Build local contracts:
    - `cd contracts && forge build`
-5. Start local chain:
-   - `anvil`
-6. In another shell, run starter app entrypoints:
-    - `cargo run --manifest-path apps/claimer/Cargo.toml`
-    - `cargo run --manifest-path apps/challenger/Cargo.toml`
-7. To serve the web interfaces locally:
-    - `cargo run --manifest-path apps/web-server/Cargo.toml`
-    - Then open: http://localhost:8010
+5. Build all Rust crates (from repo root):
+   - `cargo build --workspace`
+6. Run the claimer (spawns its own Anvil, deploys contract, submits a claim):
+   - `cargo run -p claimer-app`
+7. Or with an external Anvil instance:
+   - Start Anvil: `anvil`
+   - In another shell: `ANVIL_URL=http://127.0.0.1:8545 cargo run -p claimer-app`
+8. To serve the web interfaces locally:
+   - `cargo run -p web-server`
+   - Then open: http://localhost:8010
+
+## Cargo workspace
+
+The repo uses a Cargo workspace rooted at `Cargo.toml`. All apps and shared crates are members:
+
+- `apps/claimer` — submits claims to ClaimVerifier on a local Anvil chain
+- `apps/challenger` — (stub) will challenge fraudulent claims
+- `apps/web-server` — static file server for web tools
+- `crates/shared` — alloy contract bindings, Anvil helpers, deploy logic, run output types
+
+Build everything: `cargo build --workspace`
+Check everything: `cargo check --workspace`
+Lint everything: `cargo clippy --workspace --all-targets`
 
 ## Reproducibility requirement
 

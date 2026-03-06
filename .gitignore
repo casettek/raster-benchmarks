@@ -1,6 +1,8 @@
 /target
 /apps/**/target
+/crates/**/target
 /contracts/cache
 /contracts/out
 /contracts/broadcast
+/contracts/lib
 .kb
