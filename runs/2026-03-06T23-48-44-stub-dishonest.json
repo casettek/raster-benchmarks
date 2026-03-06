@@ -1,0 +1,75 @@
+{
+  "id": "2026-03-06T23-48-44-stub-dishonest",
+  "workload": "stub",
+  "scenario": "dishonest",
+  "timestamp": "2026-03-06T23:48:44.634562709+00:00",
+  "raster_pin": {
+    "revision": "stub"
+  },
+  "steps": [
+    {
+      "key": "exec",
+      "label": "Execute",
+      "status": "pending",
+      "metrics": {}
+    },
+    {
+      "key": "trace",
+      "label": "Trace",
+      "status": "pending",
+      "metrics": {}
+    },
+    {
+      "key": "da",
+      "label": "DA Submission",
+      "status": "pending",
+      "metrics": {}
+    },
+    {
+      "key": "claim",
+      "label": "Submit Claim",
+      "status": "done",
+      "metrics": {
+        "Artifact root": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "Tx hash": "0x7c3c45f1b77f4f4df28375e27b2a6b2b08599986d5be5aa6abe8db72c90341bc",
+        "Result root": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "Claim ID": "1",
+        "Gas used": "141637"
+      }
+    },
+    {
+      "key": "replay",
+      "label": "Replay",
+      "status": "done",
+      "metrics": {
+        "Divergence": "Detected",
+        "Replay time": "n/a"
+      }
+    },
+    {
+      "key": "outcome",
+      "label": "Outcome",
+      "status": "slashed",
+      "metrics": {
+        "Tx hash": "0x97319156d43a4ab0350d7512dbfae48888d13d3d1b367382a9e7f93d7871eb64",
+        "Gas used": "33178",
+        "Final state": "Slashed",
+        "Observed artifact root": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "Observed result root": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "Claimer result root": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "Claimer artifact root": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    }
+  ],
+  "summary": {
+    "exec_time_ms": null,
+    "trace_size_bytes": null,
+    "da_gas": null,
+    "claim_gas": 141637,
+    "replay_time_ms": null,
+    "fraud_proof_time_ms": null,
+    "fraud_proof_gas": null,
+    "total_time_ms": null,
+    "outcome": "slashed"
+  }
+}

@@ -4177,8 +4177,15 @@ dependencies = [
 name = "web-server"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "axum",
+ "chrono",
+ "eyre",
+ "serde",
+ "serde_json",
+ "shared",
  "tokio",
+ "tokio-stream",
  "tower-http 0.5.2",
 ]
 

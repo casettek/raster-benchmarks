@@ -643,12 +643,12 @@
     <section>
         <div class="source-tabs">
             <button class="source-tab active" onclick="switchTab('execute')">Execute Run</button>
-            <button class="source-tab" onclick="switchTab('past')" id="tabPastBtn">Past Runs (0)</button>
+            <button class="source-tab hidden" onclick="switchTab('past')" id="tabPastBtn">Past Runs (0)</button>
             <button class="source-tab" onclick="switchTab('import')">Import Run JSON</button>
         </div>
 
         <div id="tabExecute" class="tab-panel active">
-            <p style="font-size:0.875rem;color:var(--text-faint);margin-bottom:0.75rem;">Run a scenario with stub data to preview the lifecycle view.</p>
+            <p id="executeHint" style="font-size:0.875rem;color:var(--text-faint);margin-bottom:0.75rem;">Run a scenario with stub data to preview the lifecycle view.</p>
             <div class="controls-row">
                 <select id="workloadSelect">
                     <option value="hello-raster">hello-raster</option>
@@ -701,6 +701,7 @@
 
     <script>
         // ─── State ────────────────────────────────────────────────────────────────
+        const IS_LIVE = window.location.protocol !== 'file:';
         let currentScenario = 'honest';
         let selectedRuns = [];
 
@@ -723,7 +724,7 @@
 
         function updatePastRunsCount() {
             const stored = loadRuns();
-            const count = stored.length > 0 ? stored.length : STUB_RUNS.length;
+            const count = stored.length > 0 ? stored.length : (IS_LIVE ? 0 : STUB_RUNS.length);
             document.getElementById('tabPastBtn').textContent = 'Past Runs (' + count + ')';
         }
 
@@ -816,8 +817,16 @@
             document.getElementById('btnDishonest').classList.toggle('active', s === 'dishonest');
         }
 
-        // ─── Run simulation ───────────────────────────────────────────────────────
+        // ─── Run execution ────────────────────────────────────────────────────────
         function startRun() {
+            if (IS_LIVE) {
+                startRunLive();
+            } else {
+                startRunStub();
+            }
+        }
+
+        function startRunStub() {
             const workload = document.getElementById('workloadSelect').value;
             const scenario = currentScenario;
 
@@ -841,6 +850,74 @@
                 persistRun(run);
                 renderRunsList();
                 updatePastRunsCount();
+                document.getElementById('runBtn').disabled = false;
+            });
+        }
+
+        function startRunLive() {
+            const workload = document.getElementById('workloadSelect').value;
+            const scenario = currentScenario;
+
+            document.getElementById('runBtn').disabled = true;
+            document.getElementById('summarySection').classList.add('hidden');
+            document.getElementById('compareSection').classList.add('hidden');
+            document.getElementById('stepEmpty').style.display = 'none';
+            document.getElementById('lifecycleRunName').textContent = 'Starting...';
+
+            const list = document.getElementById('stepList');
+            list.innerHTML = '';
+
+            // Track step elements by key for incremental updates
+            const stepElements = {};
+            const stepOrder = [];
+
+            const url = `/api/run?workload=${encodeURIComponent(workload)}&scenario=${encodeURIComponent(scenario)}`;
+            const es = new EventSource(url);
+
+            es.addEventListener('step', function(e) {
+                const step = JSON.parse(e.data);
+                if (stepElements[step.key]) {
+                    // Replace existing step element
+                    const oldEl = stepElements[step.key];
+                    const newEl = makeStepEl(step, step.status);
+                    oldEl.replaceWith(newEl);
+                    stepElements[step.key] = newEl;
+                } else {
+                    // New step — append
+                    const el = makeStepEl(step, step.status);
+                    stepElements[step.key] = el;
+                    stepOrder.push(step.key);
+                    list.appendChild(el);
+                }
+            });
+
+            es.addEventListener('done', function(e) {
+                es.close();
+                const data = JSON.parse(e.data);
+                const run = data.run;
+                if (run) {
+                    document.getElementById('lifecycleRunName').textContent = run.id || data.run_id;
+                    showSummary(run);
+                    persistRun(run);
+                    fetchAndRenderRunsList();
+                    updatePastRunsCount();
+                }
+                document.getElementById('runBtn').disabled = false;
+            });
+
+            es.addEventListener('error', function(e) {
+                // SSE connection error or server-sent error event
+                if (e.data) {
+                    try {
+                        const err = JSON.parse(e.data);
+                        document.getElementById('lifecycleRunName').textContent = 'Error: ' + (err.message || 'Unknown error');
+                    } catch {
+                        document.getElementById('lifecycleRunName').textContent = 'Error: ' + e.data;
+                    }
+                } else {
+                    document.getElementById('lifecycleRunName').textContent = 'Connection error';
+                }
+                es.close();
                 document.getElementById('runBtn').disabled = false;
             });
         }
@@ -1008,12 +1085,30 @@
         }
 
         // ─── Runs list ────────────────────────────────────────────────────────────
+
+        /** Fetch runs from the API and update localStorage cache, then render. */
+        function fetchAndRenderRunsList() {
+            if (!IS_LIVE) { renderRunsList(); return; }
+            fetch('/api/runs')
+                .then(r => r.json())
+                .then(runs => {
+                    // Cache each run in localStorage for offline/comparison use
+                    saveRuns(runs);
+                    renderRunsList();
+                    updatePastRunsCount();
+                })
+                .catch(() => {
+                    // Fallback to localStorage
+                    renderRunsList();
+                });
+        }
+
         function renderRunsList() {
             const stored = loadRuns();
             const allRuns = [...stored];
 
-            // Seed with stubs if nothing stored yet
-            const list = allRuns.length > 0 ? allRuns : STUB_RUNS;
+            // Seed with stubs if nothing stored yet (filesystem mode only)
+            const list = allRuns.length > 0 ? allRuns : (IS_LIVE ? [] : STUB_RUNS);
 
             const container = document.getElementById('runsList');
             const empty = document.getElementById('runsEmpty');
@@ -1062,19 +1157,34 @@
 
             if (selectedRuns.length === 1) {
                 // Load into step view
-                const stored = loadRuns();
-                const all = stored.length > 0 ? stored : STUB_RUNS;
-                const run = all.find(r => r.id === selectedRuns[0]);
-                if (run) loadRunIntoView(run);
+                const run = findRunById(selectedRuns[0]);
+                if (run) {
+                    loadRunIntoView(run);
+                } else if (IS_LIVE) {
+                    // Try fetching from API
+                    fetch('/api/runs/' + encodeURIComponent(selectedRuns[0]))
+                        .then(r => r.ok ? r.json() : null)
+                        .then(run => { if (run) loadRunIntoView(run); });
+                }
             }
         }
 
-        function loadSelectedRun() {
+        function findRunById(id) {
             const stored = loadRuns();
-            const all = stored.length > 0 ? stored : STUB_RUNS;
+            const all = stored.length > 0 ? stored : (IS_LIVE ? [] : STUB_RUNS);
+            return all.find(r => r.id === id);
+        }
+
+        function loadSelectedRun() {
             if (selectedRuns.length < 1) return;
-            const run = all.find(r => r.id === selectedRuns[0]);
-            if (run) loadRunIntoView(run);
+            const run = findRunById(selectedRuns[0]);
+            if (run) {
+                loadRunIntoView(run);
+            } else if (IS_LIVE) {
+                fetch('/api/runs/' + encodeURIComponent(selectedRuns[0]))
+                    .then(r => r.ok ? r.json() : null)
+                    .then(run => { if (run) loadRunIntoView(run); });
+            }
         }
 
         function loadRunIntoView(run) {
@@ -1120,9 +1230,7 @@
                 document.getElementById('compareSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
                 return;
             }
-            const stored = loadRuns();
-            const all = stored.length > 0 ? stored : STUB_RUNS;
-            const [a, b] = selectedRuns.map(id => all.find(r => r.id === id));
+            const [a, b] = selectedRuns.map(id => findRunById(id));
             if (!a || !b) return;
             renderComparison(a, b);
         }
@@ -1205,8 +1313,25 @@
 
         // ─── Init ─────────────────────────────────────────────────────────────────
         function init() {
-            renderRunsList();
-            updatePastRunsCount();
+            if (IS_LIVE) {
+                // In live mode, add "stub" to workload options (matches the server's workload name)
+                const sel = document.getElementById('workloadSelect');
+                const stubOpt = document.createElement('option');
+                stubOpt.value = 'stub';
+                stubOpt.textContent = 'stub';
+                stubOpt.selected = true;
+                sel.insertBefore(stubOpt, sel.firstChild);
+
+                // Update hint text for live mode
+                document.getElementById('executeHint').textContent =
+                    'Run a live scenario against the on-chain contract. Steps stream in real time.';
+
+                // Fetch past runs from the API
+                fetchAndRenderRunsList();
+            } else {
+                renderRunsList();
+                updatePastRunsCount();
+            }
         }
 
         init();

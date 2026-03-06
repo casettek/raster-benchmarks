@@ -1,0 +1,71 @@
+{
+  "id": "2026-03-06T22-01-14-stub-honest",
+  "workload": "stub",
+  "scenario": "honest",
+  "timestamp": "2026-03-06T22:01:14.438545902+00:00",
+  "raster_pin": {
+    "revision": "stub"
+  },
+  "steps": [
+    {
+      "key": "exec",
+      "label": "Execute",
+      "status": "pending",
+      "metrics": {}
+    },
+    {
+      "key": "trace",
+      "label": "Trace",
+      "status": "pending",
+      "metrics": {}
+    },
+    {
+      "key": "da",
+      "label": "DA Submission",
+      "status": "pending",
+      "metrics": {}
+    },
+    {
+      "key": "claim",
+      "label": "Submit Claim",
+      "status": "done",
+      "metrics": {
+        "Claim ID": "1",
+        "Result root": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "Artifact root": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "Tx hash": "0x464c8f419ee4c5484e02ca5e75d65ee01810d280037bb34b9bd73f2e4ae0267b",
+        "Gas used": "141637"
+      }
+    },
+    {
+      "key": "replay",
+      "label": "Replay",
+      "status": "done",
+      "metrics": {
+        "Replay time": "n/a",
+        "Divergence": "None"
+      }
+    },
+    {
+      "key": "outcome",
+      "label": "Outcome",
+      "status": "settled",
+      "metrics": {
+        "Final state": "Settled",
+        "Gas used": "27910",
+        "Tx hash": "0xaa2a91cd06d9565853951e3092e343c005d7084ae38ac27395de11c47e0cc201"
+      }
+    }
+  ],
+  "summary": {
+    "exec_time_ms": null,
+    "trace_size_bytes": null,
+    "da_gas": null,
+    "claim_gas": 141637,
+    "replay_time_ms": null,
+    "fraud_proof_time_ms": null,
+    "fraud_proof_gas": null,
+    "total_time_ms": null,
+    "outcome": "settled"
+  }
+}

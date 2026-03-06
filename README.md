@@ -21,7 +21,19 @@ cd contracts && forge build && cd ..
 cargo build --workspace
 ```
 
-### 3. Run a scenario
+### 3. Run live from the browser
+
+Start the web server (spawns Anvil, deploys the contract, serves the API + UI):
+
+```bash
+cargo run -p web-server
+```
+
+Open `http://localhost:8010/scenario-runner/` in a browser. Select a scenario (honest/dishonest) and click **Run**. Steps stream in real time via SSE as the on-chain pipeline executes.
+
+Completed runs appear in the **Past Runs** tab. Select two runs and click **Compare** for side-by-side metrics.
+
+### 4. Run from the CLI (alternative)
 
 ```bash
 cargo run -p runner -- --scenario honest
@@ -30,19 +42,12 @@ cargo run -p runner -- --scenario dishonest
 
 Each run writes a JSON file to `runs/` with the full step-by-step results.
 
-### 4. Check the output
+### 5. Environment variables
 
-Open the JSON file in `runs/` — it contains 6 steps (`exec`, `trace`, `da`, `claim`, `replay`, `outcome`) with statuses and metrics. The Raster-only steps (`exec`, `trace`, `da`) are `"pending"` placeholders until Raster core integration lands.
-
-### 5. Visual check (optional)
-
-In a second terminal, start the web server:
-
-```bash
-cargo run -p web-server
-```
-
-Open `http://localhost:8010/scenario-runner/` in a browser. Scroll down to **Import Run JSON**, paste the contents of a run JSON file from `runs/`, and click **Import**. The run will load into the lifecycle view and get saved to your past runs.
+| Variable    | Default | Description |
+|-------------|---------|-------------|
+| `PORT`      | `8010`  | Web server listen port |
+| `ANVIL_URL` | (none)  | Connect to an external Anvil instead of spawning one |
 
 ## Project layout
 
@@ -51,7 +56,7 @@ apps/
   claimer/       Standalone claim submission binary
   challenger/    Standalone settle/challenge binary
   runner/        Orchestrator — chains claimer + challenger, writes run JSON
-  web-server/    Static file server for web/ directory
+  web-server/    API server — Anvil lifecycle, SSE run streaming, run history
 contracts/       Solidity contracts (ClaimVerifier) + Foundry config
 crates/shared/   Shared library — EVM bindings, Anvil helpers, run types
 docs/            Specs and setup docs
@@ -59,6 +64,12 @@ runs/            Run output JSON files (gitignored contents)
 web/             Static HTML tools (scenario runner, settlement estimator)
 ```
 
-## What's next
+## API
 
-Phase 3 will add a `POST /api/run` endpoint to the web server so you can trigger scenarios from the UI and see results stream in live via SSE — no more manual copy-paste.
+The web server exposes:
+
+- `GET /api/run?workload=stub&scenario=honest` — SSE stream of run progress
+- `GET /api/runs` — JSON array of all past runs (newest first)
+- `GET /api/runs/:id` — single run by ID (or 404)
+
+See `docs/specs/web-api.md` for the full specification.
