@@ -573,6 +573,64 @@
             border-top: 1px solid var(--border);
             margin: 2.5rem 0;
         }
+
+        /* Source tabs */
+        .source-tabs {
+            display: flex;
+            gap: 0;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 1.25rem;
+        }
+
+        .source-tab {
+            padding: 0.5rem 1.25rem;
+            font-size: 0.8125rem;
+            font-weight: 600;
+            font-family: inherit;
+            letter-spacing: 0.01em;
+            border: none;
+            background: none;
+            color: var(--text-faint);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -1px;
+            transition: color 0.15s, border-color 0.15s;
+        }
+
+        .source-tab:hover {
+            color: var(--text-muted);
+        }
+
+        .source-tab.active {
+            color: var(--text);
+            border-bottom-color: var(--text);
+        }
+
+        .tab-panel {
+            display: none;
+        }
+
+        .tab-panel.active {
+            display: block;
+        }
+
+        #importJsonArea {
+            width: 100%;
+            font-family: "SFMono-Regular", "Consolas", "Liberation Mono", monospace;
+            font-size: 0.8125rem;
+            background: var(--input-bg);
+            color: var(--text);
+            border: 1px solid var(--border-input);
+            border-radius: 6px;
+            padding: 0.75rem;
+            resize: vertical;
+        }
+
+        #importJsonArea:focus {
+            outline: none;
+            border-color: var(--text);
+            background: var(--input-bg-focus);
+        }
     </style>
 </head>
 <body>
@@ -583,40 +641,57 @@
     <p class="subtitle">Run a workload through the full claim/challenge lifecycle and see performance metrics at each step.</p>
 
     <section>
-        <div class="section-header">Configure</div>
-        <div class="controls-row">
-            <select id="workloadSelect">
-                <option value="hello-raster">hello-raster</option>
-                <option value="trace-stress">trace-stress</option>
-            </select>
-            <div class="scenario-toggle">
-                <button id="btnHonest" class="active" onclick="setScenario('honest')">Honest</button>
-                <button id="btnDishonest" onclick="setScenario('dishonest')">Dishonest</button>
+        <div class="source-tabs">
+            <button class="source-tab active" onclick="switchTab('execute')">Execute Run</button>
+            <button class="source-tab" onclick="switchTab('past')" id="tabPastBtn">Past Runs (0)</button>
+            <button class="source-tab" onclick="switchTab('import')">Import Run JSON</button>
+        </div>
+
+        <div id="tabExecute" class="tab-panel active">
+            <p style="font-size:0.875rem;color:var(--text-faint);margin-bottom:0.75rem;">Run a scenario with stub data to preview the lifecycle view.</p>
+            <div class="controls-row">
+                <select id="workloadSelect">
+                    <option value="hello-raster">hello-raster</option>
+                    <option value="trace-stress">trace-stress</option>
+                </select>
+                <div class="scenario-toggle">
+                    <button id="btnHonest" class="active" onclick="setScenario('honest')">Honest</button>
+                    <button id="btnDishonest" onclick="setScenario('dishonest')">Dishonest</button>
+                </div>
+                <button class="run-btn" id="runBtn" onclick="startRun()">Run</button>
             </div>
-            <button class="run-btn" id="runBtn" onclick="startRun()">Run</button>
+        </div>
+
+        <div id="tabPast" class="tab-panel">
+            <div class="runs-list" id="runsList"></div>
+            <div class="empty-state hidden" id="runsEmpty">No past runs yet. Import a run or execute a scenario to record results.</div>
+            <div class="run-actions" id="runActions" style="display:none;">
+                <button id="btnLoadRun" onclick="loadSelectedRun()">View</button>
+                <button id="btnCompareRun" onclick="startCompare()">Compare selected</button>
+            </div>
+        </div>
+
+        <div id="tabImport" class="tab-panel">
+            <p style="font-size:0.875rem;color:var(--text-faint);margin-bottom:0.75rem;">Paste the JSON output from <code>cargo run -p runner -- --scenario honest</code></p>
+            <textarea id="importJsonArea" rows="8" placeholder='Paste run JSON here...'></textarea>
+            <div style="margin-top:0.5rem;display:flex;align-items:center;gap:0.75rem;">
+                <button class="run-btn" onclick="importRunJson()">Import</button>
+            </div>
         </div>
     </section>
 
     <section id="stepSection">
-        <div class="section-header">Lifecycle</div>
+        <div class="section-header" style="display:flex;justify-content:space-between;align-items:baseline;">
+            <span>Lifecycle</span>
+            <span id="lifecycleRunName" style="font-size:0.75rem;font-weight:400;color:var(--text-faint);text-transform:none;letter-spacing:0;"></span>
+        </div>
         <div class="step-list" id="stepList"></div>
+        <div class="empty-state" id="stepEmpty" style="color:var(--text-faint);font-size:0.875rem;">No run loaded. Import a run JSON or execute a scenario above.</div>
     </section>
 
     <section id="summarySection" class="hidden">
         <div class="section-header">Summary</div>
         <div class="results" id="summaryPanel"></div>
-    </section>
-
-    <hr class="divider">
-
-    <section>
-        <div class="section-header">Past Runs</div>
-        <div class="runs-list" id="runsList"></div>
-        <div class="empty-state hidden" id="runsEmpty">No past runs yet. Run a scenario above to record results.</div>
-        <div class="run-actions" id="runActions" style="display:none;">
-            <button id="btnLoadRun" onclick="loadSelectedRun()">View</button>
-            <button id="btnCompareRun" onclick="startCompare()">Compare selected</button>
-        </div>
     </section>
 
     <section id="compareSection" class="hidden">
@@ -628,6 +703,29 @@
         // ─── State ────────────────────────────────────────────────────────────────
         let currentScenario = 'honest';
         let selectedRuns = [];
+
+        // ─── Tab switching ────────────────────────────────────────────────────────
+        function switchTab(tab) {
+            document.querySelectorAll('.source-tab').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-panel').forEach(el => el.classList.remove('active'));
+            const tabs = document.querySelectorAll('.source-tab');
+            if (tab === 'execute') {
+                tabs[0].classList.add('active');
+                document.getElementById('tabExecute').classList.add('active');
+            } else if (tab === 'past') {
+                tabs[1].classList.add('active');
+                document.getElementById('tabPast').classList.add('active');
+            } else if (tab === 'import') {
+                tabs[2].classList.add('active');
+                document.getElementById('tabImport').classList.add('active');
+            }
+        }
+
+        function updatePastRunsCount() {
+            const stored = loadRuns();
+            const count = stored.length > 0 ? stored.length : STUB_RUNS.length;
+            document.getElementById('tabPastBtn').textContent = 'Past Runs (' + count + ')';
+        }
 
         // ─── Stub run data ────────────────────────────────────────────────────────
         const STUB_RUNS = [
@@ -736,9 +834,13 @@
 
             document.getElementById('runBtn').disabled = true;
             document.getElementById('summarySection').classList.add('hidden');
+            document.getElementById('stepEmpty').style.display = 'none';
+            document.getElementById('lifecycleRunName').textContent = run.id;
             renderStepsAnimated(run, () => {
                 showSummary(run);
                 persistRun(run);
+                renderRunsList();
+                updatePastRunsCount();
                 document.getElementById('runBtn').disabled = false;
             });
         }
@@ -835,14 +937,19 @@
             const panel = document.getElementById('summaryPanel');
             sec.classList.remove('hidden');
 
-            const fraudRows = (s.fraud_proof_time_ms !== null) ? `
+            const na = '—';
+            const fmtGas = v => v != null ? v.toLocaleString('en-US') : na;
+            const fmtDur = v => v != null ? formatDuration(v / 1000) : na;
+            const fmtSize = v => v != null ? formatBytes(v) : na;
+
+            const fraudRows = (s.fraud_proof_time_ms != null) ? `
                 <div class="result-row">
                     <span class="result-label">Fraud proof generation</span>
-                    <span class="result-value">${formatDuration(s.fraud_proof_time_ms / 1000)}</span>
+                    <span class="result-value">${fmtDur(s.fraud_proof_time_ms)}</span>
                 </div>
                 <div class="result-row">
                     <span class="result-label">Fraud proof gas</span>
-                    <span class="result-value">${s.fraud_proof_gas.toLocaleString('en-US')}</span>
+                    <span class="result-value">${fmtGas(s.fraud_proof_gas)}</span>
                 </div>
             ` : '';
 
@@ -850,30 +957,30 @@
                 <div class="result-group-header">Claimer</div>
                 <div class="result-row">
                     <span class="result-label">Native execution time</span>
-                    <span class="result-value">${formatDuration(s.exec_time_ms / 1000)}</span>
+                    <span class="result-value">${fmtDur(s.exec_time_ms)}</span>
                 </div>
                 <div class="result-row">
                     <span class="result-label">Trace size</span>
-                    <span class="result-value">${formatBytes(s.trace_size_bytes)}</span>
+                    <span class="result-value">${fmtSize(s.trace_size_bytes)}</span>
                 </div>
                 <div class="result-row">
                     <span class="result-label">DA availability gas</span>
-                    <span class="result-value">${s.da_gas.toLocaleString('en-US')}</span>
+                    <span class="result-value">${fmtGas(s.da_gas)}</span>
                 </div>
                 <div class="result-row">
                     <span class="result-label">Claim submission gas</span>
-                    <span class="result-value">${s.claim_gas.toLocaleString('en-US')}</span>
+                    <span class="result-value">${fmtGas(s.claim_gas)}</span>
                 </div>
                 <div class="result-group-header">Challenger</div>
                 <div class="result-row">
                     <span class="result-label">Native replay time</span>
-                    <span class="result-value">${formatDuration(s.replay_time_ms / 1000)}</span>
+                    <span class="result-value">${fmtDur(s.replay_time_ms)}</span>
                 </div>
                 ${fraudRows}
                 <div class="result-group-header">Overall</div>
                 <div class="result-row">
                     <span class="result-label">Total wall-clock time</span>
-                    <span class="result-value">${formatDuration(s.total_time_ms / 1000)}</span>
+                    <span class="result-value">${fmtDur(s.total_time_ms)}</span>
                 </div>
                 <div class="result-row">
                     <span class="result-label">Outcome</span>
@@ -935,7 +1042,7 @@
                 item.innerHTML = `
                     <div class="run-item-info">
                         <span class="run-item-title">${run.workload} &mdash; ${run.scenario}</span>
-                        <span class="run-item-meta">${ts} &middot; pin ${pin} &middot; ${formatDuration(run.summary.total_time_ms / 1000)}</span>
+                        <span class="run-item-meta">${ts} &middot; pin ${pin} &middot; ${run.summary.total_time_ms != null ? formatDuration(run.summary.total_time_ms / 1000) : '\u2014'}</span>
                     </div>
                     <span class="run-item-outcome ${run.summary.outcome}">${run.summary.outcome.charAt(0).toUpperCase() + run.summary.outcome.slice(1)}</span>
                 `;
@@ -973,11 +1080,36 @@
         function loadRunIntoView(run) {
             const list = document.getElementById('stepList');
             list.innerHTML = '';
+            document.getElementById('stepEmpty').style.display = 'none';
             run.steps.forEach(step => {
                 list.appendChild(makeStepEl(step, step.status));
             });
             showSummary(run);
+            document.getElementById('lifecycleRunName').textContent = run.id || '';
             document.getElementById('stepSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        function importRunJson() {
+            const area = document.getElementById('importJsonArea');
+            const raw = area.value.trim();
+            if (!raw) return;
+            let run;
+            try {
+                run = JSON.parse(raw);
+            } catch (e) {
+                document.getElementById('lifecycleRunName').textContent = 'Invalid JSON: ' + e.message;
+                return;
+            }
+            if (!run.steps || !Array.isArray(run.steps)) {
+                document.getElementById('lifecycleRunName').textContent = 'Missing "steps" array in JSON.';
+                return;
+            }
+            if (!run.id) run.id = 'import-' + Date.now();
+            persistRun(run);
+            renderRunsList();
+            updatePastRunsCount();
+            loadRunIntoView(run);
+            area.value = '';
         }
 
         // ─── Comparison ───────────────────────────────────────────────────────────
@@ -1008,18 +1140,22 @@
             const aLabel = `${a.workload} / ${a.scenario}`;
             const bLabel = `${b.workload} / ${b.scenario}`;
 
+            const cFmtGas = v => v != null ? v.toLocaleString('en-US') : null;
+            const cFmtDur = v => v != null ? formatDuration(v / 1000) : null;
+            const cFmtBytes = v => v != null ? formatBytes(v) : null;
+
             const rows = [
                 { group: 'Claimer' },
-                { label: 'Native execution time', a: formatDuration(a.summary.exec_time_ms / 1000), b: formatDuration(b.summary.exec_time_ms / 1000) },
-                { label: 'Trace size', a: formatBytes(a.summary.trace_size_bytes), b: formatBytes(b.summary.trace_size_bytes) },
-                { label: 'DA availability gas', a: a.summary.da_gas.toLocaleString('en-US'), b: b.summary.da_gas.toLocaleString('en-US') },
-                { label: 'Claim submission gas', a: a.summary.claim_gas.toLocaleString('en-US'), b: b.summary.claim_gas.toLocaleString('en-US') },
+                { label: 'Native execution time', a: cFmtDur(a.summary.exec_time_ms), b: cFmtDur(b.summary.exec_time_ms) },
+                { label: 'Trace size', a: cFmtBytes(a.summary.trace_size_bytes), b: cFmtBytes(b.summary.trace_size_bytes) },
+                { label: 'DA availability gas', a: cFmtGas(a.summary.da_gas), b: cFmtGas(b.summary.da_gas) },
+                { label: 'Claim submission gas', a: cFmtGas(a.summary.claim_gas), b: cFmtGas(b.summary.claim_gas) },
                 { group: 'Challenger' },
-                { label: 'Native replay time', a: formatDuration(a.summary.replay_time_ms / 1000), b: formatDuration(b.summary.replay_time_ms / 1000) },
-                { label: 'Fraud proof time', a: a.summary.fraud_proof_time_ms !== null ? formatDuration(a.summary.fraud_proof_time_ms / 1000) : null, b: b.summary.fraud_proof_time_ms !== null ? formatDuration(b.summary.fraud_proof_time_ms / 1000) : null },
-                { label: 'Fraud proof gas', a: a.summary.fraud_proof_gas !== null ? a.summary.fraud_proof_gas.toLocaleString('en-US') : null, b: b.summary.fraud_proof_gas !== null ? b.summary.fraud_proof_gas.toLocaleString('en-US') : null },
+                { label: 'Native replay time', a: cFmtDur(a.summary.replay_time_ms), b: cFmtDur(b.summary.replay_time_ms) },
+                { label: 'Fraud proof time', a: cFmtDur(a.summary.fraud_proof_time_ms), b: cFmtDur(b.summary.fraud_proof_time_ms) },
+                { label: 'Fraud proof gas', a: cFmtGas(a.summary.fraud_proof_gas), b: cFmtGas(b.summary.fraud_proof_gas) },
                 { group: 'Overall' },
-                { label: 'Total wall-clock time', a: formatDuration(a.summary.total_time_ms / 1000), b: formatDuration(b.summary.total_time_ms / 1000) },
+                { label: 'Total wall-clock time', a: cFmtDur(a.summary.total_time_ms), b: cFmtDur(b.summary.total_time_ms) },
                 { label: 'Outcome', a: a.summary.outcome, b: b.summary.outcome },
             ];
 
@@ -1069,14 +1205,8 @@
 
         // ─── Init ─────────────────────────────────────────────────────────────────
         function init() {
-            // Show initial stub run in the step list
-            const initialRun = STUB_RUNS[0];
-            const list = document.getElementById('stepList');
-            initialRun.steps.forEach(step => {
-                list.appendChild(makeStepEl(step, step.status));
-            });
-            showSummary(initialRun);
             renderRunsList();
+            updatePastRunsCount();
         }
 
         init();

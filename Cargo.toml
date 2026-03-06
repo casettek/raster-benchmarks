@@ -2,6 +2,7 @@
 members = [
     "apps/claimer",
     "apps/challenger",
+    "apps/runner",
     "apps/web-server",
     "crates/shared",
 ]

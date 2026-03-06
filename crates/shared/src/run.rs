@@ -1,12 +1,28 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Stub Raster pin — no real Raster version to reference yet.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RasterPin {
+    pub revision: String,
+}
+
+impl Default for RasterPin {
+    fn default() -> Self {
+        Self {
+            revision: "stub".to_string(),
+        }
+    }
+}
+
 /// Top-level run output record matching the scenario runner UI JSON shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunOutput {
-    pub run_id: String,
+    pub id: String,
+    pub workload: String,
     pub scenario: String,
     pub timestamp: String,
+    pub raster_pin: RasterPin,
     pub steps: Vec<StepOutput>,
     pub summary: SummaryOutput,
 }
@@ -21,15 +37,18 @@ pub struct StepOutput {
 }
 
 /// Aggregate metrics for a completed run.
+///
+/// Raster-only fields are `Option` so they serialize as `null` when not
+/// applicable (e.g., stub workloads with no real execution).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SummaryOutput {
-    pub exec_time_ms: u64,
-    pub trace_size_bytes: u64,
-    pub da_gas: u64,
+    pub exec_time_ms: Option<u64>,
+    pub trace_size_bytes: Option<u64>,
+    pub da_gas: Option<u64>,
     pub claim_gas: u64,
-    pub replay_time_ms: u64,
-    pub fraud_proof_time_ms: u64,
-    pub fraud_proof_gas: u64,
-    pub total_time_ms: u64,
+    pub replay_time_ms: Option<u64>,
+    pub fraud_proof_time_ms: Option<u64>,
+    pub fraud_proof_gas: Option<u64>,
+    pub total_time_ms: Option<u64>,
     pub outcome: String,
 }
