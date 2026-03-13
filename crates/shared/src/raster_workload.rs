@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Instant;
 
-use eyre::{eyre, Context, Result};
+use eyre::{Context, Result, eyre};
 use serde_json::Value;
 
 pub struct RasterWorkloadResult {

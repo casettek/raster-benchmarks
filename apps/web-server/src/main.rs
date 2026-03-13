@@ -13,7 +13,8 @@ use axum::Router;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use shared::anvil::AnvilProvider;
-use shared::run::{RasterPin, RunOutput, StepOutput, SummaryOutput};
+use shared::challenger::ReplayMode;
+use shared::run::{DivergenceSummary, RasterPin, RunOutput, StepOutput, SummaryOutput};
 use tokio::sync::Mutex;
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::services::ServeDir;
@@ -80,14 +81,13 @@ async fn main() {
     let (anvil_instance, provider) = match std::env::var("ANVIL_URL") {
         Ok(url) => {
             eprintln!("Connecting to external Anvil at {url}...");
-            let provider = shared::anvil::connect_provider(&url)
-                .expect("failed to connect to external Anvil");
+            let provider =
+                shared::anvil::connect_provider(&url).expect("failed to connect to external Anvil");
             (None, provider)
         }
         Err(_) => {
             eprintln!("Spawning Anvil...");
-            let (instance, provider) =
-                shared::anvil::spawn_anvil().expect("failed to spawn Anvil");
+            let (instance, provider) = shared::anvil::spawn_anvil().expect("failed to spawn Anvil");
             eprintln!("Anvil running at {}", instance.endpoint());
             (Some(instance), provider)
         }
@@ -95,10 +95,9 @@ async fn main() {
 
     // Verify contract artifacts are available (deploy once to validate, then redeploy per run)
     eprintln!("Verifying ClaimVerifier artifacts...");
-    let test_address =
-        shared::deploy::deploy_claim_verifier(&provider, &forge_out_dir)
-            .await
-            .expect("failed to deploy ClaimVerifier (did you run `forge build` in contracts/?)");
+    let test_address = shared::deploy::deploy_claim_verifier(&provider, &forge_out_dir)
+        .await
+        .expect("failed to deploy ClaimVerifier (did you run `forge build` in contracts/?)");
     eprintln!("ClaimVerifier verified at {test_address} (will redeploy per run for clean state)");
 
     let state = Arc::new(AppState {
@@ -141,7 +140,10 @@ async fn handle_run_sse(
         return Err((
             StatusCode::BAD_REQUEST,
             Json(ErrorPayload {
-                message: format!("Invalid scenario '{}'. Expected 'honest' or 'dishonest'.", scenario),
+                message: format!(
+                    "Invalid scenario '{}'. Expected 'honest' or 'dishonest'.",
+                    scenario
+                ),
             }),
         ));
     }
@@ -197,28 +199,28 @@ async fn run_pipeline(
 
     // For phase 3, we redeploy the contract per run for clean state.
     // This ensures no claim ID conflicts across runs.
-    let contract_address = match shared::deploy::deploy_claim_verifier(
-        &state.provider,
-        &state.forge_out_dir,
-    )
-    .await
-    {
-        Ok(addr) => addr,
-        Err(e) => {
-            let _ = tx
-                .send(Ok(Event::default()
-                    .event("error")
-                    .data(serde_json::to_string(&ErrorPayload {
-                        message: format!("Failed to deploy contract: {e}"),
-                    })
-                    .unwrap_or_default())))
-                .await;
-            return;
-        }
-    };
+    let contract_address =
+        match shared::deploy::deploy_claim_verifier(&state.provider, &state.forge_out_dir).await {
+            Ok(addr) => addr,
+            Err(e) => {
+                let _ = tx
+                    .send(Ok(Event::default().event("error").data(
+                        serde_json::to_string(&ErrorPayload {
+                            message: format!("Failed to deploy contract: {e}"),
+                        })
+                        .unwrap_or_default(),
+                    )))
+                    .await;
+                return;
+            }
+        };
 
     // Emit Raster-only steps as pending immediately
-    for (key, label) in [("exec", "Execute"), ("trace", "Trace"), ("da", "DA Submission")] {
+    for (key, label) in [
+        ("exec", "Execute"),
+        ("trace", "Trace"),
+        ("da", "DA Submission"),
+    ] {
         let step_data = serde_json::json!({
             "key": key,
             "label": label,
@@ -227,9 +229,7 @@ async fn run_pipeline(
         });
         send(
             &tx,
-            Event::default()
-                .event("step")
-                .data(step_data.to_string()),
+            Event::default().event("step").data(step_data.to_string()),
         )
         .await;
     }
@@ -251,21 +251,20 @@ async fn run_pipeline(
 
     // Submit claim
     let claim_result =
-        match shared::claimer::submit_claim(&state.provider, contract_address, None).await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            let _ = tx
-                .send(Ok(Event::default()
-                    .event("error")
-                    .data(serde_json::to_string(&ErrorPayload {
-                        message: format!("Claim submission failed: {e}"),
-                    })
-                    .unwrap_or_default())))
-                .await;
-            return;
-        }
-    };
+        match shared::claimer::submit_claim(&state.provider, contract_address, None).await {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = tx
+                    .send(Ok(Event::default().event("error").data(
+                        serde_json::to_string(&ErrorPayload {
+                            message: format!("Claim submission failed: {e}"),
+                        })
+                        .unwrap_or_default(),
+                    )))
+                    .await;
+                return;
+            }
+        };
 
     // Emit claim step as "done" with metrics
     let mut claim_metrics = HashMap::new();
@@ -277,7 +276,10 @@ async fn run_pipeline(
         claim_result.artifact_root.clone(),
     );
     claim_metrics.insert("Result root".to_string(), claim_result.result_root.clone());
-    claim_metrics.insert("Trace tx hash".to_string(), claim_result.trace_tx_hash.clone());
+    claim_metrics.insert(
+        "Trace tx hash".to_string(),
+        claim_result.trace_tx_hash.clone(),
+    );
     claim_metrics.insert(
         "Trace payload bytes".to_string(),
         claim_result.trace_payload_bytes.to_string(),
@@ -295,154 +297,125 @@ async fn run_pipeline(
     });
     send(
         &tx,
-        Event::default()
-            .event("step")
-            .data(claim_done.to_string()),
+        Event::default().event("step").data(claim_done.to_string()),
     )
     .await;
 
     // Challenger step
-    let (outcome_status, _outcome_gas, outcome_metrics) = match scenario.as_str() {
-        "honest" => {
-            // Emit replay running
-            let replay_running = serde_json::json!({
-                "key": "replay",
-                "label": "Replay",
-                "status": "running",
-                "metrics": {}
-            });
-            send(
-                &tx,
-                Event::default()
-                    .event("step")
-                    .data(replay_running.to_string()),
-            )
-            .await;
+    let replay_running = serde_json::json!({
+        "key": "replay",
+        "label": "Replay",
+        "status": "running",
+        "metrics": {}
+    });
+    send(
+        &tx,
+        Event::default()
+            .event("step")
+            .data(replay_running.to_string()),
+    )
+    .await;
 
-            match shared::challenger::settle_claim(
-                &state.provider,
-                contract_address,
-                claim_result.claim_id,
-            )
-            .await
-            {
-                Ok(result) => {
-                    // Emit replay done
-                    let mut replay_metrics = HashMap::new();
-                    replay_metrics.insert("Replay time".to_string(), "n/a".to_string());
-                    replay_metrics.insert("Divergence".to_string(), "None".to_string());
-                    let replay_done = serde_json::json!({
-                        "key": "replay",
-                        "label": "Replay",
-                        "status": "done",
-                        "metrics": replay_metrics
-                    });
-                    send(
-                        &tx,
-                        Event::default()
-                            .event("step")
-                            .data(replay_done.to_string()),
-                    )
-                    .await;
-
-                    let mut om = HashMap::new();
-                    om.insert("Tx hash".to_string(), result.tx_hash.clone());
-                    om.insert("Gas used".to_string(), result.gas_used.to_string());
-                    om.insert("Final state".to_string(), result.final_state.clone());
-                    ("settled", result.gas_used, om)
-                }
-                Err(e) => {
-                    let _ = tx
-                        .send(Ok(Event::default()
-                            .event("error")
-                            .data(serde_json::to_string(&ErrorPayload {
-                                message: format!("Settle failed: {e}"),
-                            })
-                            .unwrap_or_default())))
-                        .await;
-                    return;
-                }
-            }
-        }
-        "dishonest" => {
-            // Emit replay running
-            let replay_running = serde_json::json!({
-                "key": "replay",
-                "label": "Replay",
-                "status": "running",
-                "metrics": {}
-            });
-            send(
-                &tx,
-                Event::default()
-                    .event("step")
-                    .data(replay_running.to_string()),
-            )
-            .await;
-
-            match shared::challenger::challenge_claim(
-                &state.provider,
-                contract_address,
-                claim_result.claim_id,
-            )
-            .await
-            {
-                Ok(result) => {
-                    // Emit replay done
-                    let mut replay_metrics = HashMap::new();
-                    replay_metrics.insert("Replay time".to_string(), "n/a".to_string());
-                    replay_metrics.insert("Divergence".to_string(), "Detected".to_string());
-                    let replay_done = serde_json::json!({
-                        "key": "replay",
-                        "label": "Replay",
-                        "status": "done",
-                        "metrics": replay_metrics
-                    });
-                    send(
-                        &tx,
-                        Event::default()
-                            .event("step")
-                            .data(replay_done.to_string()),
-                    )
-                    .await;
-
-                    let mut om = HashMap::new();
-                    om.insert("Tx hash".to_string(), result.tx_hash.clone());
-                    om.insert("Gas used".to_string(), result.gas_used.to_string());
-                    om.insert("Final state".to_string(), result.final_state.clone());
-                    om.insert(
-                        "Claimer artifact root".to_string(),
-                        result.claimer_artifact_root.clone(),
-                    );
-                    om.insert(
-                        "Claimer result root".to_string(),
-                        result.claimer_result_root.clone(),
-                    );
-                    om.insert(
-                        "Observed artifact root".to_string(),
-                        result.observed_artifact_root.clone(),
-                    );
-                    om.insert(
-                        "Observed result root".to_string(),
-                        result.observed_result_root.clone(),
-                    );
-                    ("slashed", result.gas_used, om)
-                }
-                Err(e) => {
-                    let _ = tx
-                        .send(Ok(Event::default()
-                            .event("error")
-                            .data(serde_json::to_string(&ErrorPayload {
-                                message: format!("Challenge failed: {e}"),
-                            })
-                            .unwrap_or_default())))
-                        .await;
-                    return;
-                }
-            }
-        }
-        _ => unreachable!(),
+    let replay_mode = if scenario == "honest" {
+        ReplayMode::Honest
+    } else {
+        ReplayMode::DishonestSimulation
     };
+    let resolution = match shared::challenger::resolve_claim_with_replay(
+        &state.provider,
+        contract_address,
+        claim_result.claim_id,
+        replay_mode,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            let _ = tx
+                .send(Ok(Event::default().event("error").data(
+                    serde_json::to_string(&ErrorPayload {
+                        message: format!("Replay/challenge resolution failed: {e}"),
+                    })
+                    .unwrap_or_default(),
+                )))
+                .await;
+            return;
+        }
+    };
+
+    let mut replay_metrics = HashMap::new();
+    replay_metrics.insert(
+        "Replay time (ms)".to_string(),
+        resolution.replay_time_ms.to_string(),
+    );
+    replay_metrics.insert(
+        "Divergence".to_string(),
+        if resolution.divergence.detected {
+            "Detected".to_string()
+        } else {
+            "None".to_string()
+        },
+    );
+    replay_metrics.insert("Reason".to_string(), resolution.divergence.reason.clone());
+    replay_metrics.insert(
+        "Trace fetch".to_string(),
+        resolution.divergence.trace_fetch_status.clone(),
+    );
+    if let Some(index) = resolution.divergence.first_divergence_index {
+        replay_metrics.insert("First divergence index".to_string(), index.to_string());
+    }
+
+    let replay_done = serde_json::json!({
+        "key": "replay",
+        "label": "Replay",
+        "status": "done",
+        "metrics": replay_metrics
+    });
+    send(
+        &tx,
+        Event::default().event("step").data(replay_done.to_string()),
+    )
+    .await;
+
+    let outcome_status = if resolution.final_state == "Settled" {
+        "settled"
+    } else {
+        "slashed"
+    };
+    let mut outcome_metrics = HashMap::new();
+    outcome_metrics.insert("Tx hash".to_string(), resolution.tx_hash.clone());
+    outcome_metrics.insert("Gas used".to_string(), resolution.gas_used.to_string());
+    outcome_metrics.insert("Final state".to_string(), resolution.final_state.clone());
+    outcome_metrics.insert("Proof status".to_string(), resolution.proof_status.clone());
+    outcome_metrics.insert(
+        "Claimer artifact root".to_string(),
+        resolution.claimer_artifact_root.clone(),
+    );
+    outcome_metrics.insert(
+        "Claimer result root".to_string(),
+        resolution.claimer_result_root.clone(),
+    );
+    outcome_metrics.insert(
+        "Observed artifact root".to_string(),
+        resolution.divergence.observed_artifact_root.clone(),
+    );
+    outcome_metrics.insert(
+        "Observed result root".to_string(),
+        resolution.divergence.observed_result_root.clone(),
+    );
+    outcome_metrics.insert(
+        "Trace fetch".to_string(),
+        resolution.divergence.trace_fetch_status.clone(),
+    );
+    if let Some(trace_tx_hash) = &resolution.divergence.trace_tx_hash {
+        outcome_metrics.insert("Trace tx hash".to_string(), trace_tx_hash.clone());
+    }
+    if let Some(trace_payload_bytes) = resolution.divergence.trace_payload_bytes {
+        outcome_metrics.insert(
+            "Trace payload bytes".to_string(),
+            trace_payload_bytes.to_string(),
+        );
+    }
 
     // Emit outcome step
     let outcome_step = serde_json::json!({
@@ -491,16 +464,27 @@ async fn run_pipeline(
             status: "done".to_string(),
             metrics: {
                 let mut m = HashMap::new();
-                m.insert("Replay time".to_string(), "n/a".to_string());
+                m.insert(
+                    "Replay time (ms)".to_string(),
+                    resolution.replay_time_ms.to_string(),
+                );
                 m.insert(
                     "Divergence".to_string(),
-                    if scenario == "honest" {
-                        "None"
-                    } else {
+                    if resolution.divergence.detected {
                         "Detected"
+                    } else {
+                        "None"
                     }
                     .to_string(),
                 );
+                m.insert("Reason".to_string(), resolution.divergence.reason.clone());
+                m.insert(
+                    "Trace fetch".to_string(),
+                    resolution.divergence.trace_fetch_status.clone(),
+                );
+                if let Some(index) = resolution.divergence.first_divergence_index {
+                    m.insert("First divergence index".to_string(), index.to_string());
+                }
                 m
             },
         },
@@ -517,9 +501,18 @@ async fn run_pipeline(
         trace_size_bytes: None,
         da_gas: None,
         claim_gas: claim_result.gas_used,
-        replay_time_ms: None,
+        replay_time_ms: Some(resolution.replay_time_ms),
         fraud_proof_time_ms: None,
         fraud_proof_gas: None,
+        proof_status: resolution.proof_status.clone(),
+        divergence: Some(DivergenceSummary {
+            detected: resolution.divergence.detected,
+            reason: resolution.divergence.reason.clone(),
+            first_divergence_index: resolution.divergence.first_divergence_index,
+            trace_fetch_status: resolution.divergence.trace_fetch_status.clone(),
+            trace_tx_hash: resolution.divergence.trace_tx_hash.clone(),
+            trace_payload_bytes: resolution.divergence.trace_payload_bytes,
+        }),
         total_time_ms: None,
         outcome: outcome_status.to_string(),
     };
@@ -568,11 +561,7 @@ async fn handle_list_runs(
 
     let mut files: Vec<_> = entries
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|ext| ext == "json")
-        })
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
         .collect();
 
     // Sort by filename descending (newest first, since filenames start with timestamps)

@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
 use alloy::primitives::{Address, B256, Bytes};
+use alloy::providers::Provider;
+use alloy::sol_types::SolCall;
 use eyre::{Context, Result};
 use serde::Serialize;
 
@@ -84,4 +86,61 @@ pub fn persist_trace_index(run_id: &str, publication: &TracePublication) -> Resu
 pub fn parse_trace_tx_hash(hash: &str) -> Result<B256> {
     hash.parse::<B256>()
         .wrap_err("invalid trace tx hash in publication pointer")
+}
+
+pub async fn fetch_trace_payload_from_tx(
+    provider: &AnvilProvider,
+    contract_address: Address,
+    trace_tx_hash: B256,
+    expected_payload_bytes: u32,
+    expected_codec_id: u8,
+) -> Result<Vec<u8>> {
+    let tx = provider
+        .get_transaction_by_hash(trace_tx_hash)
+        .await?
+        .ok_or_else(|| eyre::eyre!("trace publication tx not found for hash {trace_tx_hash}"))?;
+
+    let tx_json = serde_json::to_value(&tx)?;
+    let to_hex = tx_json
+        .get("to")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| eyre::eyre!("trace publication tx missing destination address"))?;
+    let to_address: Address = to_hex
+        .parse()
+        .wrap_err("trace publication tx has invalid destination address")?;
+    if to_address != contract_address {
+        return Err(eyre::eyre!(
+            "trace publication tx {} does not target expected contract {}",
+            trace_tx_hash,
+            contract_address
+        ));
+    }
+
+    let input_hex = tx_json
+        .get("input")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| eyre::eyre!("trace publication tx missing input calldata"))?;
+    let calldata = alloy::hex::decode(input_hex.trim_start_matches("0x"))
+        .wrap_err("trace publication tx calldata is not valid hex")?;
+
+    let call = IClaimVerifier::publishTraceCall::abi_decode(&calldata)
+        .wrap_err("failed to decode publishTrace calldata")?;
+
+    if call.codecId != expected_codec_id {
+        return Err(eyre::eyre!(
+            "trace codec mismatch: expected {}, got {}",
+            expected_codec_id,
+            call.codecId
+        ));
+    }
+
+    if call.payload.len() != expected_payload_bytes as usize {
+        return Err(eyre::eyre!(
+            "trace payload size mismatch: expected {}, got {}",
+            expected_payload_bytes,
+            call.payload.len()
+        ));
+    }
+
+    Ok(call.payload.to_vec())
 }

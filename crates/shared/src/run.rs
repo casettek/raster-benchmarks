@@ -49,6 +49,20 @@ pub struct SummaryOutput {
     pub replay_time_ms: Option<u64>,
     pub fraud_proof_time_ms: Option<u64>,
     pub fraud_proof_gas: Option<u64>,
+    #[serde(default)]
+    pub proof_status: String,
+    #[serde(default)]
+    pub divergence: Option<DivergenceSummary>,
     pub total_time_ms: Option<u64>,
     pub outcome: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DivergenceSummary {
+    pub detected: bool,
+    pub reason: String,
+    pub first_divergence_index: Option<u64>,
+    pub trace_fetch_status: String,
+    pub trace_tx_hash: Option<String>,
+    pub trace_payload_bytes: Option<u32>,
 }

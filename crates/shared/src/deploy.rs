@@ -5,7 +5,7 @@ use alloy::network::TransactionBuilder;
 use alloy::primitives::Address;
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 
 use crate::anvil::AnvilProvider;
 

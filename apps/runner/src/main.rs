@@ -4,11 +4,15 @@ use std::path::PathBuf;
 use chrono::Utc;
 use clap::Parser;
 use eyre::Result;
+use shared::challenger::ReplayMode;
 use shared::raster_workload;
-use shared::run::{RasterPin, RunOutput, StepOutput, SummaryOutput};
+use shared::run::{DivergenceSummary, RasterPin, RunOutput, StepOutput, SummaryOutput};
 
 #[derive(Parser)]
-#[command(name = "runner", about = "Orchestrate a claimer → challenger scenario run")]
+#[command(
+    name = "runner",
+    about = "Orchestrate a claimer → challenger scenario run"
+)]
 struct Cli {
     /// Scenario to run: "honest" or "dishonest"
     #[arg(long)]
@@ -52,8 +56,7 @@ async fn main() -> Result<()> {
 
     // 3. Deploy contract
     eprintln!("Deploying ClaimVerifier from {}...", forge_out.display());
-    let contract_address =
-        shared::deploy::deploy_claim_verifier(&provider, &forge_out).await?;
+    let contract_address = shared::deploy::deploy_claim_verifier(&provider, &forge_out).await?;
     eprintln!("ClaimVerifier deployed at {contract_address}");
 
     // 4. Claimer step — submit claim with stub roots
@@ -80,55 +83,61 @@ async fn main() -> Result<()> {
         claim_result.claim_id, claim_result.gas_used
     );
 
-    // 5. Challenger step — honest (settle) or dishonest (challenge+slash)
-    let (_outcome_tx_hash, outcome_gas, outcome_status, outcome_metrics) = match cli.scenario.as_str()
-    {
-        "honest" => {
-            eprintln!("Settling claim (honest path)...");
-            let result = shared::challenger::settle_claim(
-                &provider,
-                contract_address,
-                claim_result.claim_id,
-            )
-            .await?;
-            let mut metrics = HashMap::new();
-            metrics.insert("Tx hash".to_string(), result.tx_hash.clone());
-            metrics.insert("Gas used".to_string(), result.gas_used.to_string());
-            metrics.insert("Final state".to_string(), result.final_state.clone());
-            (result.tx_hash, result.gas_used, "settled", metrics)
-        }
-        "dishonest" => {
-            eprintln!("Challenging claim (dishonest path)...");
-            let result = shared::challenger::challenge_claim(
-                &provider,
-                contract_address,
-                claim_result.claim_id,
-            )
-            .await?;
-            let mut metrics = HashMap::new();
-            metrics.insert("Tx hash".to_string(), result.tx_hash.clone());
-            metrics.insert("Gas used".to_string(), result.gas_used.to_string());
-            metrics.insert("Final state".to_string(), result.final_state.clone());
-            metrics.insert(
-                "Claimer artifact root".to_string(),
-                result.claimer_artifact_root.clone(),
-            );
-            metrics.insert(
-                "Claimer result root".to_string(),
-                result.claimer_result_root.clone(),
-            );
-            metrics.insert(
-                "Observed artifact root".to_string(),
-                result.observed_artifact_root.clone(),
-            );
-            metrics.insert(
-                "Observed result root".to_string(),
-                result.observed_result_root.clone(),
-            );
-            (result.tx_hash, result.gas_used, "slashed", metrics)
-        }
-        _ => unreachable!(),
+    // 5. Challenger step — rerun-first audit with conditional trace fetch on mismatch.
+    let replay_mode = if cli.scenario == "honest" {
+        ReplayMode::Honest
+    } else {
+        ReplayMode::DishonestSimulation
     };
+    let resolution = shared::challenger::resolve_claim_with_replay(
+        &provider,
+        contract_address,
+        claim_result.claim_id,
+        replay_mode,
+    )
+    .await?;
+
+    let outcome_status = if resolution.final_state == "Settled" {
+        "settled"
+    } else {
+        "slashed"
+    };
+    let mut outcome_metrics = HashMap::new();
+    outcome_metrics.insert("Tx hash".to_string(), resolution.tx_hash.clone());
+    outcome_metrics.insert("Gas used".to_string(), resolution.gas_used.to_string());
+    outcome_metrics.insert("Final state".to_string(), resolution.final_state.clone());
+    outcome_metrics.insert("Proof status".to_string(), resolution.proof_status.clone());
+    outcome_metrics.insert(
+        "Claimer artifact root".to_string(),
+        resolution.claimer_artifact_root.clone(),
+    );
+    outcome_metrics.insert(
+        "Claimer result root".to_string(),
+        resolution.claimer_result_root.clone(),
+    );
+    outcome_metrics.insert(
+        "Observed artifact root".to_string(),
+        resolution.divergence.observed_artifact_root.clone(),
+    );
+    outcome_metrics.insert(
+        "Observed result root".to_string(),
+        resolution.divergence.observed_result_root.clone(),
+    );
+
+    if let Some(trace_tx_hash) = &resolution.divergence.trace_tx_hash {
+        outcome_metrics.insert("Trace tx hash".to_string(), trace_tx_hash.clone());
+    }
+    if let Some(trace_payload_bytes) = resolution.divergence.trace_payload_bytes {
+        outcome_metrics.insert(
+            "Trace payload bytes".to_string(),
+            trace_payload_bytes.to_string(),
+        );
+    }
+    outcome_metrics.insert(
+        "Trace fetch".to_string(),
+        resolution.divergence.trace_fetch_status.clone(),
+    );
+    let outcome_gas = resolution.gas_used;
 
     eprintln!("Outcome: {outcome_status} (gas={outcome_gas})");
 
@@ -183,7 +192,10 @@ async fn main() -> Result<()> {
                 label: "DA Submission".to_string(),
                 status: "done".to_string(),
                 metrics: HashMap::from([
-                    ("Blob tx hash".to_string(), publication.trace_tx_hash.clone()),
+                    (
+                        "Blob tx hash".to_string(),
+                        publication.trace_tx_hash.clone(),
+                    ),
                     (
                         "Payload bytes".to_string(),
                         publication.payload_bytes.to_string(),
@@ -211,9 +223,15 @@ async fn main() -> Result<()> {
                 m.insert("Claim ID".to_string(), claim_result.claim_id.to_string());
                 m.insert("Tx hash".to_string(), claim_result.tx_hash.clone());
                 m.insert("Gas used".to_string(), claim_result.gas_used.to_string());
-                m.insert("Artifact root".to_string(), claim_result.artifact_root.clone());
+                m.insert(
+                    "Artifact root".to_string(),
+                    claim_result.artifact_root.clone(),
+                );
                 m.insert("Result root".to_string(), claim_result.result_root.clone());
-                m.insert("Trace tx hash".to_string(), claim_result.trace_tx_hash.clone());
+                m.insert(
+                    "Trace tx hash".to_string(),
+                    claim_result.trace_tx_hash.clone(),
+                );
                 m.insert(
                     "Trace payload bytes".to_string(),
                     claim_result.trace_payload_bytes.to_string(),
@@ -232,15 +250,26 @@ async fn main() -> Result<()> {
             status: "done".to_string(),
             metrics: {
                 let mut m = HashMap::new();
-                m.insert("Replay time".to_string(), "n/a".to_string());
+                m.insert(
+                    "Replay time (ms)".to_string(),
+                    resolution.replay_time_ms.to_string(),
+                );
                 m.insert(
                     "Divergence".to_string(),
-                    if cli.scenario == "honest" {
-                        "None".to_string()
-                    } else {
+                    if resolution.divergence.detected {
                         "Detected".to_string()
+                    } else {
+                        "None".to_string()
                     },
                 );
+                m.insert("Reason".to_string(), resolution.divergence.reason.clone());
+                m.insert(
+                    "Trace fetch".to_string(),
+                    resolution.divergence.trace_fetch_status.clone(),
+                );
+                if let Some(index) = resolution.divergence.first_divergence_index {
+                    m.insert("First divergence index".to_string(), index.to_string());
+                }
                 m
             },
         },
@@ -256,11 +285,22 @@ async fn main() -> Result<()> {
     let summary = SummaryOutput {
         exec_time_ms,
         trace_size_bytes,
-        da_gas: da_publication.as_ref().map(|publication| publication.gas_used),
+        da_gas: da_publication
+            .as_ref()
+            .map(|publication| publication.gas_used),
         claim_gas: claim_result.gas_used as u64,
-        replay_time_ms: None,
+        replay_time_ms: Some(resolution.replay_time_ms),
         fraud_proof_time_ms: None,
         fraud_proof_gas: None,
+        proof_status: resolution.proof_status.clone(),
+        divergence: Some(DivergenceSummary {
+            detected: resolution.divergence.detected,
+            reason: resolution.divergence.reason.clone(),
+            first_divergence_index: resolution.divergence.first_divergence_index,
+            trace_fetch_status: resolution.divergence.trace_fetch_status.clone(),
+            trace_tx_hash: resolution.divergence.trace_tx_hash.clone(),
+            trace_payload_bytes: resolution.divergence.trace_payload_bytes,
+        }),
         total_time_ms: None,
         outcome: outcome_status.to_string(),
     };

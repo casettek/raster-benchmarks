@@ -2,12 +2,14 @@ use std::env;
 
 use alloy::primitives::U256;
 use eyre::Result;
+use shared::challenger::ReplayMode;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Config from environment
-    let anvil_url = env::var("ANVIL_URL")
-        .map_err(|_| eyre::eyre!("ANVIL_URL is required (challenger connects to existing Anvil)"))?;
+    let anvil_url = env::var("ANVIL_URL").map_err(|_| {
+        eyre::eyre!("ANVIL_URL is required (challenger connects to existing Anvil)")
+    })?;
     let contract_address: alloy::primitives::Address = env::var("CONTRACT_ADDRESS")
         .map_err(|_| eyre::eyre!("CONTRACT_ADDRESS is required"))?
         .parse()
@@ -24,15 +26,25 @@ async fn main() -> Result<()> {
 
     match mode.as_str() {
         "honest" => {
-            eprintln!("Settling claim {claim_id} (honest path)...");
-            let result =
-                shared::challenger::settle_claim(&provider, contract_address, claim_id).await?;
+            eprintln!("Replaying + resolving claim {claim_id} (honest mode)...");
+            let result = shared::challenger::resolve_claim_with_replay(
+                &provider,
+                contract_address,
+                claim_id,
+                ReplayMode::Honest,
+            )
+            .await?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
         "dishonest" => {
-            eprintln!("Challenging claim {claim_id} (dishonest path)...");
-            let result =
-                shared::challenger::challenge_claim(&provider, contract_address, claim_id).await?;
+            eprintln!("Replaying + resolving claim {claim_id} (dishonest simulation)...");
+            let result = shared::challenger::resolve_claim_with_replay(
+                &provider,
+                contract_address,
+                claim_id,
+                ReplayMode::DishonestSimulation,
+            )
+            .await?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
         other => {

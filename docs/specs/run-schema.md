@@ -78,8 +78,11 @@ Each step in the `steps` array has:
 - `Trace codec id` — pointer codec id (`0` when unset)
 
 **`replay` metrics:**
-- `Replay time` — replay duration or `"n/a"` for stub
+- `Replay time (ms)` — replay duration in milliseconds
 - `Divergence` — `"None"` (honest) or `"Detected"` (dishonest)
+- `Reason` — deterministic replay/audit reason string
+- `Trace fetch` — conditional trace-audit status (`skipped`, `fetched`, `missing-pointer`)
+- `First divergence index` — optional localized divergence index when available
 
 **`outcome` metrics (honest):**
 - `Tx hash` — settlement transaction hash
@@ -90,10 +93,13 @@ Each step in the `steps` array has:
 - `Tx hash` — challenge transaction hash
 - `Gas used` — gas consumed by `challengeClaim()`
 - `Final state` — `"Slashed"`
+- `Proof status` — currently `"not-generated"`
 - `Claimer artifact root` — original claimer's artifact root (hex)
 - `Claimer result root` — original claimer's result root (hex)
 - `Observed artifact root` — challenger's divergent artifact root (hex)
 - `Observed result root` — challenger's divergent result root (hex)
+- `Trace fetch` — whether challenge path fetched the trace payload
+- `Trace tx hash` / `Trace payload bytes` — included when trace fetch occurred
 
 ## `SummaryOutput` object
 
@@ -106,10 +112,23 @@ Each step in the `steps` array has:
 | `replay_time_ms` | `u64` | yes | Replay verification time in milliseconds |
 | `fraud_proof_time_ms` | `u64` | yes | Fraud proof generation time in milliseconds |
 | `fraud_proof_gas` | `u64` | yes | Gas consumed by fraud proof verification |
+| `proof_status` | `string` | no | Proof pipeline status (`"not-generated"` in current phase) |
+| `divergence` | `object` | yes | Structured divergence report from replay audit (see below) |
 | `total_time_ms` | `u64` | yes | Total end-to-end run time in milliseconds |
 | `outcome` | `string` | no | Final outcome: `"settled"` or `"slashed"` |
 
 Nullable fields are serialized as JSON `null` when not applicable (for example, `stub` workload runs).
+
+## `divergence` object
+
+| Field | Type | Nullable | Description |
+|---|---|---|---|
+| `detected` | `bool` | no | Whether replay output diverged from claimed output |
+| `reason` | `string` | no | Human-readable replay/audit decision reason |
+| `first_divergence_index` | `u64` | yes | First divergence index when trace localization is available |
+| `trace_fetch_status` | `string` | no | `"skipped"`, `"fetched"`, or `"missing-pointer"` |
+| `trace_tx_hash` | `string` | yes | Pointer hash used for conditional trace fetch |
+| `trace_payload_bytes` | `u32` | yes | Pointer payload size validated during trace fetch |
 
 ## File naming convention
 

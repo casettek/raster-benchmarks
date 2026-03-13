@@ -78,12 +78,20 @@ data: {"message":"<error text>"}
 
 1. `exec`, `trace`, `da` are emitted first as `status: "pending"` placeholders.
 2. `claim` emitted as `"running"`, then re-emitted as `"done"` with metrics after `submitClaim` tx.
-3. `replay` emitted as `"running"`, then re-emitted as `"done"` after challenger operation.
+3. `replay` emitted as `"running"`, then re-emitted as `"done"` after rerun-first challenger audit.
 4. `outcome` emitted as `"settled"` or `"slashed"` with final metrics.
 5. `done` event with full `RunOutput`.
 
 `claim` metrics include trace pointer fields (`Trace tx hash`, `Trace payload bytes`, `Trace codec id`).
 For stub paths these values are zeroed (`0x00..00`, `0`, `0`).
+
+Replay behavior is rerun-first:
+
+- Challenger fetches claim metadata, replays locally from claim workload inputs, and compares local roots against claim roots.
+- If replay matches, no trace payload fetch is attempted and outcome resolves via settlement.
+- If replay diverges, challenger conditionally fetches and decodes the trace payload from the trace publication tx pointer, then resolves via challenge/slash in dishonest simulation mode.
+
+Replay and outcome metrics now include divergence context (`Reason`, `Trace fetch`, optional `First divergence index`) and proof status (`Proof status = not-generated` until fraud-proof generation is implemented).
 
 ### `GET /api/runs` — List all runs
 
