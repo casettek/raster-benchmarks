@@ -29,6 +29,8 @@ Start the web server (spawns Anvil, deploys the contract, serves the API + UI):
 cargo run -p web-server
 ```
 
+Note: first startup may take longer because the server warms Raster workload binaries once.
+
 Open `http://localhost:8010/scenario-runner/` in a browser. Select a scenario (honest/dishonest) and click **Run**. Steps stream in real time via SSE as the on-chain pipeline executes.
 
 Completed runs appear in the **Past Runs** tab. Select two runs and click **Compare** for side-by-side metrics.
@@ -36,8 +38,8 @@ Completed runs appear in the **Past Runs** tab. Select two runs and click **Comp
 ### 4. Run from the CLI (alternative)
 
 ```bash
-cargo run -p runner -- --scenario honest
-cargo run -p runner -- --scenario dishonest
+cargo run -p runner -- --scenario honest --workload raster-hello
+cargo run -p runner -- --scenario dishonest --workload raster-hello
 ```
 
 Each run writes a JSON file to `runs/` with the full step-by-step results.
@@ -60,7 +62,7 @@ apps/
 contracts/       Solidity contracts (ClaimVerifier) + Foundry config
 crates/shared/   Shared library — EVM bindings, Anvil helpers, run types
 docs/            Specs and setup docs
-runs/            Run output JSON files (gitignored contents)
+runs/            Run output JSON files and golden fixtures (`runs/fixtures/`)
 web/             Static HTML tools (scenario runner, settlement estimator)
 ```
 
@@ -68,7 +70,7 @@ web/             Static HTML tools (scenario runner, settlement estimator)
 
 The web server exposes:
 
-- `GET /api/run?workload=stub&scenario=honest` — SSE stream of run progress
+- `GET /api/run?workload=raster-hello&scenario=honest` — SSE stream of run progress
 - `GET /api/runs` — JSON array of all past runs (newest first)
 - `GET /api/runs/:id` — single run by ID (or 404)
 

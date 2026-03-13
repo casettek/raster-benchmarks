@@ -6,9 +6,10 @@ The web server (`apps/web-server`) manages an Anvil lifecycle and exposes a REST
 
 On startup the web server:
 
-1. Spawns a local Anvil instance (or connects to an external one via `ANVIL_URL`).
-2. Verifies the `ClaimVerifier` contract can be deployed from Foundry artifacts.
-3. Serves static files from `web/` and the API routes below.
+1. Warms known Raster workloads once (build-if-missing) to avoid first-run compile stalls.
+2. Spawns a local Anvil instance (or connects to an external one via `ANVIL_URL`).
+3. Verifies the `ClaimVerifier` contract can be deployed from Foundry artifacts.
+4. Serves static files from `web/` and the API routes below.
 
 Each run redeploys `ClaimVerifier` for clean chain state (no claim ID conflicts between runs).
 
@@ -36,7 +37,7 @@ Uses GET with query parameters so the browser `EventSource` API can connect dire
 
 | Param      | Type   | Default     | Description |
 |------------|--------|-------------|-------------|
-| `workload` | string | `"stub"`    | Workload name (`"raster-hello"` enables real trace generation + DA publication in CLI runner) |
+| `workload` | string | `"stub"`    | Workload name (`"raster-hello"` enables real exec + trace + DA publication) |
 | `scenario` | string | `"honest"`  | `"honest"` or `"dishonest"` |
 
 **Response:** `text/event-stream`
@@ -77,13 +78,15 @@ data: {"message":"<error text>"}
 #### Step emission sequence
 
 1. `exec`, `trace`, `da` are emitted first as `status: "pending"` placeholders.
+   - For `workload=raster-hello`, each step is promoted to `"running"` when active, then re-emitted as `status: "done"` with real metrics.
+   - For `workload=stub`, they remain `"pending"`.
 2. `claim` emitted as `"running"`, then re-emitted as `"done"` with metrics after `submitClaim` tx.
 3. `replay` emitted as `"running"`, then re-emitted as `"done"` after rerun-first challenger audit.
 4. `outcome` emitted as `"settled"` or `"slashed"` with final metrics.
 5. `done` event with full `RunOutput`.
 
 `claim` metrics include trace pointer fields (`Trace tx hash`, `Trace payload bytes`, `Trace codec id`).
-For stub paths these values are zeroed (`0x00..00`, `0`, `0`).
+For `stub` paths these values are zeroed (`0x00..00`, `0`, `0`).
 
 Replay behavior is rerun-first:
 

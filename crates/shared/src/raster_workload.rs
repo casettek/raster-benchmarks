@@ -1,9 +1,10 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Instant;
 
-use eyre::{Context, Result, eyre};
+use eyre::{eyre, Context, Result};
 use serde_json::Value;
 
 pub struct RasterWorkloadResult {
@@ -15,26 +16,27 @@ pub struct RasterWorkloadResult {
     pub trace_ndjson_path: String,
 }
 
+pub fn warmup_known_workloads() -> Result<()> {
+    for workload in ["raster-hello"] {
+        let spec = workload_spec(workload)?;
+        ensure_workload_binary(&spec)?;
+    }
+    Ok(())
+}
+
 pub fn run(workload: &str, run_id: &str) -> Result<Option<RasterWorkloadResult>> {
     let spec = match workload {
         "stub" => return Ok(None),
-        "raster-hello" => WorkloadSpec {
-            run_dir: "apps/workloads/raster-hello",
-            input_json: "\"Raster\"",
-        },
-        _ => {
-            return Err(eyre!(
-                "Unknown workload '{}'. Expected 'stub' or 'raster-hello'.",
-                workload
-            ));
-        }
+        _ => workload_spec(workload)?,
     };
 
+    ensure_workload_binary(&spec)?;
+
     let start = Instant::now();
-    let output = Command::new("cargo")
+    let output = Command::new(spec.bin_path)
         .current_dir(spec.run_dir)
-        .env("RISC0_SKIP_BUILD", "1")
-        .args(["run", "--quiet", "--", "--input", spec.input_json])
+        .arg("--input")
+        .arg(spec.input_json)
         .output()
         .wrap_err("failed to execute Raster workload")?;
 
@@ -101,6 +103,45 @@ pub fn run(workload: &str, run_id: &str) -> Result<Option<RasterWorkloadResult>>
     }))
 }
 
+fn workload_spec(workload: &str) -> Result<WorkloadSpec> {
+    match workload {
+        "raster-hello" => Ok(WorkloadSpec {
+            run_dir: "apps/workloads/raster-hello",
+            bin_path: "../../../target/debug/workload-raster-hello",
+            input_json: "\"Raster\"",
+        }),
+        _ => Err(eyre!(
+            "Unknown workload '{}'. Expected 'stub' or 'raster-hello'.",
+            workload
+        )),
+    }
+}
+
+fn ensure_workload_binary(spec: &WorkloadSpec) -> Result<()> {
+    let bin_abs = Path::new(spec.run_dir).join(spec.bin_path);
+    if bin_abs.exists() {
+        return Ok(());
+    }
+
+    let build_output = Command::new("cargo")
+        .current_dir(spec.run_dir)
+        .env("RISC0_SKIP_BUILD", "1")
+        .args(["build", "--quiet"])
+        .output()
+        .wrap_err("failed to build Raster workload")?;
+
+    if !build_output.status.success() {
+        let stderr = String::from_utf8_lossy(&build_output.stderr);
+        return Err(eyre!(
+            "Raster workload build failed with status {}: {}",
+            build_output.status,
+            stderr.trim()
+        ));
+    }
+
+    Ok(())
+}
+
 pub fn load_trace_payload(result: &RasterWorkloadResult) -> Result<Vec<u8>> {
     std::fs::read(&result.trace_ndjson_path)
         .wrap_err("failed to load trace payload for DA publication")
@@ -154,5 +195,6 @@ fn raster_revision() -> String {
 
 struct WorkloadSpec {
     run_dir: &'static str,
+    bin_path: &'static str,
     input_json: &'static str,
 }

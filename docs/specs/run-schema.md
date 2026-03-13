@@ -1,12 +1,14 @@
 # Run Output Schema
 
-Canonical JSON schema for `runs/*.json` run output files produced by `apps/runner`. This is the data contract between the runner and the scenario runner UI (`web/scenario-runner/index.html`).
+Canonical JSON schema for `runs/*.json` run output files produced by `apps/runner`
+and `apps/web-server`. This is the data contract for CLI runs, SSE `done` payloads,
+and the scenario runner UI (`web/scenario-runner/index.html`).
 
 ## Ownership
 
 - Defined by: `crates/shared/src/run.rs` (Rust source of truth)
-- Produced by: `apps/runner`
-- Consumed by: `web/scenario-runner/index.html`, future `apps/web-server` API
+- Produced by: `apps/runner`, `apps/web-server`
+- Consumed by: `apps/web-server` API, `web/scenario-runner/index.html`
 
 ## Top-level structure
 
@@ -52,7 +54,7 @@ Each step in the `steps` array has:
 
 **`exec` metrics (`status = done`):**
 - `Workload` — executed workload identifier
-- `Exec time (ms)` — workload execution duration in milliseconds
+- `Exec time (ms)` — native workload runtime in milliseconds (measured from workload binary start until trace emission completes; excludes Cargo build/check and host-side trace artifact persistence)
 - `Trace steps` — number of trace step records captured from workload execution
 
 **`trace` metrics (`status = done`):**
@@ -149,6 +151,5 @@ runs/artifacts/<run-id>/trace.ndjson
 
 ## Compatibility notes
 
-- This schema is the contract between `apps/runner` (producer) and `web/scenario-runner/index.html` (consumer).
-- Phase 3 will add `apps/web-server` as an intermediary that serves run files over HTTP/SSE. The schema must remain stable across that transition.
-- When Raster core integration is added, the `exec`, `trace`, and `da` steps will transition from `"pending"` to `"done"` with populated metrics. The nullable summary fields will be populated with real values.
+- This schema must remain stable across both CLI and API/SSE producers.
+- `exec`/`trace`/`da` are `"done"` with metrics for Raster-backed workloads (for example `raster-hello`) and `"pending"` for placeholder `stub` runs.

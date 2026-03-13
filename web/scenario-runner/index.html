@@ -651,8 +651,8 @@
             <p id="executeHint" style="font-size:0.875rem;color:var(--text-faint);margin-bottom:0.75rem;">Run a scenario with stub data to preview the lifecycle view.</p>
             <div class="controls-row">
                 <select id="workloadSelect">
-                    <option value="hello-raster">hello-raster</option>
-                    <option value="trace-stress">trace-stress</option>
+                    <option value="raster-hello">raster-hello</option>
+                    <option value="stub">stub</option>
                 </select>
                 <div class="scenario-toggle">
                     <button id="btnHonest" class="active" onclick="setScenario('honest')">Honest</button>
@@ -732,7 +732,7 @@
         const STUB_RUNS = [
             {
                 id: 'run-001',
-                workload: 'hello-raster',
+                workload: 'raster-hello',
                 scenario: 'honest',
                 timestamp: '2026-03-05T10:14:02Z',
                 raster_pin: { revision: 'a4770be' },
@@ -758,7 +758,7 @@
             },
             {
                 id: 'run-002',
-                workload: 'hello-raster',
+                workload: 'raster-hello',
                 scenario: 'dishonest',
                 timestamp: '2026-03-05T10:22:48Z',
                 raster_pin: { revision: 'a4770be' },
@@ -784,7 +784,7 @@
             },
             {
                 id: 'run-003',
-                workload: 'trace-stress',
+                workload: 'stub',
                 scenario: 'honest',
                 timestamp: '2026-03-05T10:35:11Z',
                 raster_pin: { revision: 'a4770be' },
@@ -867,9 +867,23 @@
             const list = document.getElementById('stepList');
             list.innerHTML = '';
 
+            const lifecycleSteps = [
+                { key: 'exec', label: 'Execute' },
+                { key: 'trace', label: 'Trace' },
+                { key: 'da', label: 'DA Submission' },
+                { key: 'claim', label: 'Submit Claim' },
+                { key: 'replay', label: 'Replay' },
+                { key: 'outcome', label: 'Outcome' }
+            ];
+
             // Track step elements by key for incremental updates
             const stepElements = {};
-            const stepOrder = [];
+            lifecycleSteps.forEach(step => {
+                const pendingStep = { ...step, status: 'pending', metrics: {} };
+                const el = makeStepEl(pendingStep, 'pending');
+                stepElements[step.key] = el;
+                list.appendChild(el);
+            });
 
             const url = `/api/run?workload=${encodeURIComponent(workload)}&scenario=${encodeURIComponent(scenario)}`;
             const es = new EventSource(url);
@@ -886,7 +900,6 @@
                     // New step — append
                     const el = makeStepEl(step, step.status);
                     stepElements[step.key] = el;
-                    stepOrder.push(step.key);
                     list.appendChild(el);
                 }
             });
@@ -1314,14 +1327,6 @@
         // ─── Init ─────────────────────────────────────────────────────────────────
         function init() {
             if (IS_LIVE) {
-                // In live mode, add "stub" to workload options (matches the server's workload name)
-                const sel = document.getElementById('workloadSelect');
-                const stubOpt = document.createElement('option');
-                stubOpt.value = 'stub';
-                stubOpt.textContent = 'stub';
-                stubOpt.selected = true;
-                sel.insertBefore(stubOpt, sel.firstChild);
-
                 // Update hint text for live mode
                 document.getElementById('executeHint').textContent =
                     'Run a live scenario against the on-chain contract. Steps stream in real time.';

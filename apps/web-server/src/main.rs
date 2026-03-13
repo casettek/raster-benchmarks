@@ -3,6 +3,7 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -14,6 +15,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use shared::anvil::AnvilProvider;
 use shared::challenger::ReplayMode;
+use shared::raster_workload;
 use shared::run::{DivergenceSummary, RasterPin, RunOutput, StepOutput, SummaryOutput};
 use tokio::sync::Mutex;
 use tokio_stream::wrappers::ReceiverStream;
@@ -76,6 +78,11 @@ async fn main() {
     std::fs::create_dir_all(&runs_dir).expect("failed to create runs/ directory");
 
     let forge_out_dir = PathBuf::from("contracts/out");
+
+    eprintln!("Warming Raster workloads (first run optimization)...");
+    if let Err(e) = shared::raster_workload::warmup_known_workloads() {
+        eprintln!("warning: Raster workload warmup failed: {e}");
+    }
 
     // Anvil lifecycle: spawn or connect
     let (anvil_instance, provider) = match std::env::var("ANVIL_URL") {
@@ -181,6 +188,7 @@ async fn run_pipeline(
     workload: String,
     scenario: String,
 ) {
+    let total_start = Instant::now();
     let timestamp = Utc::now();
     let run_id = format!(
         "{}-{}-{}",
@@ -196,6 +204,25 @@ async fn run_pipeline(
             let _ = tx.send(Ok(event)).await;
         }
     };
+
+    // Emit Raster-only steps as pending immediately for early UI feedback.
+    for (key, label) in [
+        ("exec", "Execute"),
+        ("trace", "Trace"),
+        ("da", "DA Submission"),
+    ] {
+        let step_data = serde_json::json!({
+            "key": key,
+            "label": label,
+            "status": "pending",
+            "metrics": {}
+        });
+        send(
+            &tx,
+            Event::default().event("step").data(step_data.to_string()),
+        )
+        .await;
+    }
 
     // For phase 3, we redeploy the contract per run for clean state.
     // This ensures no claim ID conflicts across runs.
@@ -215,24 +242,157 @@ async fn run_pipeline(
             }
         };
 
-    // Emit Raster-only steps as pending immediately
-    for (key, label) in [
-        ("exec", "Execute"),
-        ("trace", "Trace"),
-        ("da", "DA Submission"),
-    ] {
-        let step_data = serde_json::json!({
-            "key": key,
-            "label": label,
-            "status": "pending",
+    if workload != "stub" {
+        let exec_running = serde_json::json!({
+            "key": "exec",
+            "label": "Execute",
+            "status": "running",
             "metrics": {}
         });
         send(
             &tx,
-            Event::default().event("step").data(step_data.to_string()),
+            Event::default().event("step").data(exec_running.to_string()),
         )
         .await;
     }
+
+    let raster_workload_result = match raster_workload::run(&workload, &run_id) {
+        Ok(result) => result,
+        Err(e) => {
+            let _ = tx
+                .send(Ok(Event::default().event("error").data(
+                    serde_json::to_string(&ErrorPayload {
+                        message: format!("Raster workload failed: {e}"),
+                    })
+                    .unwrap_or_default(),
+                )))
+                .await;
+            return;
+        }
+    };
+
+    if let Some(result) = &raster_workload_result {
+        let exec_done = serde_json::json!({
+            "key": "exec",
+            "label": "Execute",
+            "status": "done",
+            "metrics": raster_workload::exec_step_metrics(result, &workload)
+        });
+        send(
+            &tx,
+            Event::default().event("step").data(exec_done.to_string()),
+        )
+        .await;
+
+        let trace_running = serde_json::json!({
+            "key": "trace",
+            "label": "Trace",
+            "status": "running",
+            "metrics": {}
+        });
+        send(
+            &tx,
+            Event::default().event("step").data(trace_running.to_string()),
+        )
+        .await;
+
+        let trace_done = serde_json::json!({
+            "key": "trace",
+            "label": "Trace",
+            "status": "done",
+            "metrics": raster_workload::trace_step_metrics(result)
+        });
+        send(
+            &tx,
+            Event::default().event("step").data(trace_done.to_string()),
+        )
+        .await;
+    }
+
+    let da_publication = if let Some(result) = &raster_workload_result {
+        let da_running = serde_json::json!({
+            "key": "da",
+            "label": "DA Submission",
+            "status": "running",
+            "metrics": {}
+        });
+        send(
+            &tx,
+            Event::default().event("step").data(da_running.to_string()),
+        )
+        .await;
+
+        let trace_payload = match raster_workload::load_trace_payload(result) {
+            Ok(payload) => payload,
+            Err(e) => {
+                let _ = tx
+                    .send(Ok(Event::default().event("error").data(
+                        serde_json::to_string(&ErrorPayload {
+                            message: format!("Failed to load trace payload: {e}"),
+                        })
+                        .unwrap_or_default(),
+                    )))
+                    .await;
+                return;
+            }
+        };
+
+        let publication = match shared::da::publish_trace(
+            &state.provider,
+            contract_address,
+            trace_payload,
+            shared::da::TRACE_CODEC_NDJSON_V1,
+        )
+        .await
+        {
+            Ok(publication) => publication,
+            Err(e) => {
+                let _ = tx
+                    .send(Ok(Event::default().event("error").data(
+                        serde_json::to_string(&ErrorPayload {
+                            message: format!("Trace publication failed: {e}"),
+                        })
+                        .unwrap_or_default(),
+                    )))
+                    .await;
+                return;
+            }
+        };
+
+        if let Err(e) = shared::da::persist_trace_index(&run_id, &publication) {
+            let _ = tx
+                .send(Ok(Event::default().event("error").data(
+                    serde_json::to_string(&ErrorPayload {
+                        message: format!("Failed to persist trace index: {e}"),
+                    })
+                    .unwrap_or_default(),
+                )))
+                .await;
+            return;
+        }
+
+        let da_done = serde_json::json!({
+            "key": "da",
+            "label": "DA Submission",
+            "status": "done",
+            "metrics": {
+                "Blob tx hash": publication.trace_tx_hash.clone(),
+                "Payload bytes": publication.payload_bytes.to_string(),
+                "Codec id": publication.codec_id.to_string(),
+                "Gas used": publication.gas_used.to_string(),
+                "Payload hash": publication.payload_hash.clone()
+            }
+        });
+        send(
+            &tx,
+            Event::default().event("step").data(da_done.to_string()),
+        )
+        .await;
+
+        Some(publication)
+    } else {
+        None
+    };
 
     // Emit claim step as "running"
     let claim_running = serde_json::json!({
@@ -250,21 +410,26 @@ async fn run_pipeline(
     .await;
 
     // Submit claim
-    let claim_result =
-        match shared::claimer::submit_claim(&state.provider, contract_address, None).await {
-            Ok(r) => r,
-            Err(e) => {
-                let _ = tx
-                    .send(Ok(Event::default().event("error").data(
-                        serde_json::to_string(&ErrorPayload {
-                            message: format!("Claim submission failed: {e}"),
-                        })
-                        .unwrap_or_default(),
-                    )))
-                    .await;
-                return;
-            }
-        };
+    let claim_result = match shared::claimer::submit_claim(
+        &state.provider,
+        contract_address,
+        da_publication.as_ref(),
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = tx
+                .send(Ok(Event::default().event("error").data(
+                    serde_json::to_string(&ErrorPayload {
+                        message: format!("Claim submission failed: {e}"),
+                    })
+                    .unwrap_or_default(),
+                )))
+                .await;
+            return;
+        }
+    };
 
     // Emit claim step as "done" with metrics
     let mut claim_metrics = HashMap::new();
@@ -434,23 +599,62 @@ async fn run_pipeline(
 
     // Assemble RunOutput
     let steps = vec![
-        StepOutput {
-            key: "exec".to_string(),
-            label: "Execute".to_string(),
-            status: "pending".to_string(),
-            metrics: HashMap::new(),
+        if let Some(result) = &raster_workload_result {
+            StepOutput {
+                key: "exec".to_string(),
+                label: "Execute".to_string(),
+                status: "done".to_string(),
+                metrics: raster_workload::exec_step_metrics(result, &workload),
+            }
+        } else {
+            StepOutput {
+                key: "exec".to_string(),
+                label: "Execute".to_string(),
+                status: "pending".to_string(),
+                metrics: HashMap::new(),
+            }
         },
-        StepOutput {
-            key: "trace".to_string(),
-            label: "Trace".to_string(),
-            status: "pending".to_string(),
-            metrics: HashMap::new(),
+        if let Some(result) = &raster_workload_result {
+            StepOutput {
+                key: "trace".to_string(),
+                label: "Trace".to_string(),
+                status: "done".to_string(),
+                metrics: raster_workload::trace_step_metrics(result),
+            }
+        } else {
+            StepOutput {
+                key: "trace".to_string(),
+                label: "Trace".to_string(),
+                status: "pending".to_string(),
+                metrics: HashMap::new(),
+            }
         },
-        StepOutput {
-            key: "da".to_string(),
-            label: "DA Submission".to_string(),
-            status: "pending".to_string(),
-            metrics: HashMap::new(),
+        if let Some(publication) = &da_publication {
+            StepOutput {
+                key: "da".to_string(),
+                label: "DA Submission".to_string(),
+                status: "done".to_string(),
+                metrics: HashMap::from([
+                    (
+                        "Blob tx hash".to_string(),
+                        publication.trace_tx_hash.clone(),
+                    ),
+                    (
+                        "Payload bytes".to_string(),
+                        publication.payload_bytes.to_string(),
+                    ),
+                    ("Codec id".to_string(), publication.codec_id.to_string()),
+                    ("Gas used".to_string(), publication.gas_used.to_string()),
+                    ("Payload hash".to_string(), publication.payload_hash.clone()),
+                ]),
+            }
+        } else {
+            StepOutput {
+                key: "da".to_string(),
+                label: "DA Submission".to_string(),
+                status: "pending".to_string(),
+                metrics: HashMap::new(),
+            }
         },
         StepOutput {
             key: "claim".to_string(),
@@ -497,9 +701,11 @@ async fn run_pipeline(
     ];
 
     let summary = SummaryOutput {
-        exec_time_ms: None,
-        trace_size_bytes: None,
-        da_gas: None,
+        exec_time_ms: raster_workload_result.as_ref().map(|r| r.exec_time_ms),
+        trace_size_bytes: raster_workload_result.as_ref().map(|r| r.trace_size_bytes),
+        da_gas: da_publication
+            .as_ref()
+            .map(|publication| publication.gas_used),
         claim_gas: claim_result.gas_used,
         replay_time_ms: Some(resolution.replay_time_ms),
         fraud_proof_time_ms: None,
@@ -513,7 +719,7 @@ async fn run_pipeline(
             trace_tx_hash: resolution.divergence.trace_tx_hash.clone(),
             trace_payload_bytes: resolution.divergence.trace_payload_bytes,
         }),
-        total_time_ms: None,
+        total_time_ms: Some(total_start.elapsed().as_millis().min(u64::MAX as u128) as u64),
         outcome: outcome_status.to_string(),
     };
 
@@ -522,7 +728,13 @@ async fn run_pipeline(
         workload,
         scenario,
         timestamp: timestamp.to_rfc3339(),
-        raster_pin: RasterPin::default(),
+        raster_pin: if let Some(result) = &raster_workload_result {
+            RasterPin {
+                revision: result.raster_revision.clone(),
+            }
+        } else {
+            RasterPin::default()
+        },
         steps,
         summary,
     };

@@ -6,3 +6,6 @@
 /contracts/broadcast
 /contracts/lib
 .kb
+runs/*.json
+runs/artifacts/
+runs/blob-index/

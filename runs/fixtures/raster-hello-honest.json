@@ -1,5 +1,5 @@
 {
-  "id": "2026-03-13T18-28-10-raster-hello-honest",
+  "id": "fixture-raster-hello-honest",
   "workload": "raster-hello",
   "scenario": "honest",
   "timestamp": "2026-03-13T18:28:10.084651551+00:00",
@@ -23,7 +23,7 @@
       "status": "done",
       "metrics": {
         "Trace size (bytes)": "3167",
-        "Trace file": "runs/artifacts/2026-03-13T18-28-10-raster-hello-honest/trace.json",
+        "Trace file": "runs/artifacts/fixture-raster-hello-honest/trace.json",
         "Raster revision": "e218bee19d0caa12b3efba91e9028f49b95e0806"
       }
     },
@@ -99,7 +99,7 @@
       "trace_tx_hash": null,
       "trace_payload_bytes": null
     },
-    "total_time_ms": null,
+    "total_time_ms": 3015,
     "outcome": "settled"
   }
 }
