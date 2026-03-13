@@ -1,0 +1,11 @@
+[package]
+name = "workload-raster-hello"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+raster = { path = "../../../../raster/crates/raster", default-features = false, features = ["std"] }

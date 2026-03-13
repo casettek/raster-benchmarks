@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use chrono::Utc;
 use clap::Parser;
 use eyre::Result;
+use shared::raster_workload;
 use shared::run::{RasterPin, RunOutput, StepOutput, SummaryOutput};
 
 #[derive(Parser)]
@@ -42,17 +43,20 @@ async fn main() -> Result<()> {
         cli.scenario
     );
 
-    // 1. Start chain
+    // 1. Execute Raster workload when requested
+    let raster_workload_result = raster_workload::run(&cli.workload, &run_id)?;
+
+    // 2. Start chain
     eprintln!("Spawning Anvil...");
     let (_anvil, provider) = shared::anvil::spawn_anvil()?;
 
-    // 2. Deploy contract
+    // 3. Deploy contract
     eprintln!("Deploying ClaimVerifier from {}...", forge_out.display());
     let contract_address =
         shared::deploy::deploy_claim_verifier(&provider, &forge_out).await?;
     eprintln!("ClaimVerifier deployed at {contract_address}");
 
-    // 3. Claimer step — submit claim with stub roots
+    // 4. Claimer step — submit claim with stub roots
     eprintln!("Submitting claim...");
     let claim_result = shared::claimer::submit_claim(&provider, contract_address).await?;
     eprintln!(
@@ -60,7 +64,7 @@ async fn main() -> Result<()> {
         claim_result.claim_id, claim_result.gas_used
     );
 
-    // 4. Challenger step — honest (settle) or dishonest (challenge+slash)
+    // 5. Challenger step — honest (settle) or dishonest (challenge+slash)
     let (_outcome_tx_hash, outcome_gas, outcome_status, outcome_metrics) = match cli.scenario.as_str()
     {
         "honest" => {
@@ -112,21 +116,51 @@ async fn main() -> Result<()> {
 
     eprintln!("Outcome: {outcome_status} (gas={outcome_gas})");
 
-    // 5. Assemble RunOutput
+    // 6. Assemble RunOutput
+    let (exec_step, trace_step, exec_time_ms, trace_size_bytes, raster_pin) =
+        if let Some(result) = &raster_workload_result {
+            (
+                StepOutput {
+                    key: "exec".to_string(),
+                    label: "Execute".to_string(),
+                    status: "done".to_string(),
+                    metrics: raster_workload::exec_step_metrics(result, &cli.workload),
+                },
+                StepOutput {
+                    key: "trace".to_string(),
+                    label: "Trace".to_string(),
+                    status: "done".to_string(),
+                    metrics: raster_workload::trace_step_metrics(result),
+                },
+                Some(result.exec_time_ms),
+                Some(result.trace_size_bytes),
+                RasterPin {
+                    revision: result.raster_revision.clone(),
+                },
+            )
+        } else {
+            (
+                StepOutput {
+                    key: "exec".to_string(),
+                    label: "Execute".to_string(),
+                    status: "pending".to_string(),
+                    metrics: HashMap::new(),
+                },
+                StepOutput {
+                    key: "trace".to_string(),
+                    label: "Trace".to_string(),
+                    status: "pending".to_string(),
+                    metrics: HashMap::new(),
+                },
+                None,
+                None,
+                RasterPin::default(),
+            )
+        };
+
     let steps = vec![
-        // Raster-only steps — pending placeholders
-        StepOutput {
-            key: "exec".to_string(),
-            label: "Execute".to_string(),
-            status: "pending".to_string(),
-            metrics: HashMap::new(),
-        },
-        StepOutput {
-            key: "trace".to_string(),
-            label: "Trace".to_string(),
-            status: "pending".to_string(),
-            metrics: HashMap::new(),
-        },
+        exec_step,
+        trace_step,
         StepOutput {
             key: "da".to_string(),
             label: "DA Submission".to_string(),
@@ -177,8 +211,8 @@ async fn main() -> Result<()> {
     ];
 
     let summary = SummaryOutput {
-        exec_time_ms: None,
-        trace_size_bytes: None,
+        exec_time_ms,
+        trace_size_bytes,
         da_gas: None,
         claim_gas: claim_result.gas_used as u64,
         replay_time_ms: None,
@@ -193,12 +227,12 @@ async fn main() -> Result<()> {
         workload: cli.workload.clone(),
         scenario: cli.scenario.clone(),
         timestamp: timestamp.to_rfc3339(),
-        raster_pin: RasterPin::default(),
+        raster_pin,
         steps,
         summary,
     };
 
-    // 6. Write run file
+    // 7. Write run file
     let runs_dir = PathBuf::from("runs");
     std::fs::create_dir_all(&runs_dir)?;
     let file_name = format!("{run_id}.json");
@@ -209,7 +243,7 @@ async fn main() -> Result<()> {
     // Verify serde roundtrip
     let _roundtrip: RunOutput = serde_json::from_str(&json)?;
 
-    // 7. Print summary
+    // 8. Print summary
     eprintln!("---");
     println!(
         "outcome={} claim_gas={} outcome_gas={} contract={} file={}",

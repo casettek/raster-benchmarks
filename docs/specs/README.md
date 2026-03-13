@@ -31,12 +31,13 @@ This directory contains canonical behavioral and operational specs for `raster-b
 Current active top-level directories in this lean baseline:
 
 - `apps/`: runnable benchmark app entrypoints (claimer/challenger) that interact with local contracts.
+- `apps/workloads/`: Raster-backed benchmark workloads executed by the runner.
 - `contracts/`: benchmark-local smart contracts plus Foundry build/test/deploy scaffolding.
 - `docs/`: canonical specs and setup contracts.
 - `runs/`: local run-output landing area.
 - `web/`: zero-dependency static HTML tools (open directly in a browser, no build step required).
 
-Additional directories for workloads/scenarios/orchestration/metrics will be reintroduced only when they contain non-placeholder implementation.
+`runs/artifacts/<run-id>/` is reserved for persisted Raster trace artifacts produced during real workload execution.
 
 ### Run metadata schema (phase-0 baseline)
 

@@ -1,0 +1,79 @@
+{
+  "id": "2026-03-13T17-50-16-raster-hello-honest",
+  "workload": "raster-hello",
+  "scenario": "honest",
+  "timestamp": "2026-03-13T17:50:16.303733563+00:00",
+  "raster_pin": {
+    "revision": "e218bee19d0caa12b3efba91e9028f49b95e0806"
+  },
+  "steps": [
+    {
+      "key": "exec",
+      "label": "Execute",
+      "status": "done",
+      "metrics": {
+        "Workload": "raster-hello",
+        "Trace steps": "10",
+        "Exec time (ms)": "2880"
+      }
+    },
+    {
+      "key": "trace",
+      "label": "Trace",
+      "status": "done",
+      "metrics": {
+        "Trace file": "runs/artifacts/2026-03-13T17-50-16-raster-hello-honest/trace.json",
+        "Raster revision": "e218bee19d0caa12b3efba91e9028f49b95e0806",
+        "Trace size (bytes)": "3167"
+      }
+    },
+    {
+      "key": "da",
+      "label": "DA Submission",
+      "status": "pending",
+      "metrics": {}
+    },
+    {
+      "key": "claim",
+      "label": "Submit Claim",
+      "status": "done",
+      "metrics": {
+        "Claim ID": "1",
+        "Tx hash": "0x6ea3822f24d8d140d8487fdb83deb7d2893a86d0375ec320238a1b2245b7d12b",
+        "Gas used": "141637",
+        "Result root": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "Artifact root": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "key": "replay",
+      "label": "Replay",
+      "status": "done",
+      "metrics": {
+        "Replay time": "n/a",
+        "Divergence": "None"
+      }
+    },
+    {
+      "key": "outcome",
+      "label": "Outcome",
+      "status": "settled",
+      "metrics": {
+        "Tx hash": "0x47bb53677e075d63d6c992eda71445cbeffbdbcd9b02dfe84ad9480bb3216391",
+        "Gas used": "27910",
+        "Final state": "Settled"
+      }
+    }
+  ],
+  "summary": {
+    "exec_time_ms": 2880,
+    "trace_size_bytes": 3167,
+    "da_gas": null,
+    "claim_gas": 141637,
+    "replay_time_ms": null,
+    "fraud_proof_time_ms": null,
+    "fraud_proof_gas": null,
+    "total_time_ms": null,
+    "outcome": "settled"
+  }
+}

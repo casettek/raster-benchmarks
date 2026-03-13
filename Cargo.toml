@@ -4,6 +4,7 @@ members = [
     "apps/challenger",
     "apps/runner",
     "apps/web-server",
+    "apps/workloads/raster-hello",
     "crates/shared",
 ]
 resolver = "2"

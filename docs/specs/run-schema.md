@@ -13,7 +13,7 @@ Canonical JSON schema for `runs/*.json` run output files produced by `apps/runne
 | Field | Type | Nullable | Description |
 |---|---|---|---|
 | `id` | `string` | no | Run identifier, format: `<ISO-timestamp>-<workload>-<scenario>` |
-| `workload` | `string` | no | Workload name (e.g., `"stub"`) |
+| `workload` | `string` | no | Workload name (e.g., `"stub"`, `"raster-hello"`) |
 | `scenario` | `string` | no | Scenario name: `"honest"` or `"dishonest"` |
 | `timestamp` | `string` | no | RFC 3339 timestamp of when the run started |
 | `raster_pin` | `object` | no | Raster version pin (see below) |
@@ -24,7 +24,7 @@ Canonical JSON schema for `runs/*.json` run output files produced by `apps/runne
 
 | Field | Type | Nullable | Description |
 |---|---|---|---|
-| `revision` | `string` | no | Git commit SHA or `"stub"` when no real Raster version is pinned |
+| `revision` | `string` | no | Pinned Raster dependency revision (full git SHA for local `../raster` integration, or `"stub"` for placeholder workloads) |
 
 ## `StepOutput` object
 
@@ -41,14 +41,24 @@ Each step in the `steps` array has:
 
 | Key | Label | Status values | Description |
 |---|---|---|---|
-| `exec` | Execute | `pending` | Raster program execution (not applicable in stub phase) |
-| `trace` | Trace | `pending` | Trace generation (not applicable in stub phase) |
+| `exec` | Execute | `pending`, `done` | Raster program execution (`done` for real Raster workloads) |
+| `trace` | Trace | `pending`, `done` | Trace generation (`done` when trace artifacts are emitted) |
 | `da` | DA Submission | `pending` | Data availability submission (not applicable in stub phase) |
 | `claim` | Submit Claim | `done` | On-chain claim submission via `submitClaim()` |
 | `replay` | Replay | `done` | Replay verification step |
 | `outcome` | Outcome | `settled`, `slashed` | Final on-chain settlement or slashing outcome |
 
 ### Step metrics by key
+
+**`exec` metrics (`status = done`):**
+- `Workload` — executed workload identifier
+- `Exec time (ms)` — workload execution duration in milliseconds
+- `Trace steps` — number of trace step records captured from workload execution
+
+**`trace` metrics (`status = done`):**
+- `Trace size (bytes)` — serialized trace payload size (NDJSON bytes)
+- `Trace file` — relative path to persisted trace artifact JSON
+- `Raster revision` — pinned Raster dependency revision used for the run
 
 **`claim` metrics:**
 - `Claim ID` — on-chain claim identifier
@@ -89,7 +99,7 @@ Each step in the `steps` array has:
 | `total_time_ms` | `u64` | yes | Total end-to-end run time in milliseconds |
 | `outcome` | `string` | no | Final outcome: `"settled"` or `"slashed"` |
 
-Nullable fields are serialized as JSON `null` when not applicable (e.g., Raster-only fields in stub workloads).
+Nullable fields are serialized as JSON `null` when not applicable (for example, `stub` workload runs).
 
 ## File naming convention
 
@@ -99,7 +109,14 @@ Run files are written to `runs/` with the naming pattern:
 runs/<ISO-timestamp>-<workload>-<scenario>.json
 ```
 
-Example: `runs/2026-03-06T12-00-00-stub-honest.json`
+Example: `runs/2026-03-06T12-00-00-raster-hello-honest.json`
+
+Real Raster workload runs also persist trace artifacts under:
+
+```
+runs/artifacts/<run-id>/trace.json
+runs/artifacts/<run-id>/trace.ndjson
+```
 
 ## Compatibility notes
 
