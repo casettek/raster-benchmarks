@@ -12,6 +12,7 @@ pub struct RasterWorkloadResult {
     pub trace_size_bytes: u64,
     pub trace_step_count: usize,
     pub trace_json_path: String,
+    pub trace_ndjson_path: String,
 }
 
 pub fn run(workload: &str, run_id: &str) -> Result<Option<RasterWorkloadResult>> {
@@ -96,7 +97,13 @@ pub fn run(workload: &str, run_id: &str) -> Result<Option<RasterWorkloadResult>>
         trace_size_bytes: ndjson_buf.len() as u64,
         trace_step_count: trace_records.len(),
         trace_json_path: trace_json_path.to_string_lossy().to_string(),
+        trace_ndjson_path: trace_ndjson_path.to_string_lossy().to_string(),
     }))
+}
+
+pub fn load_trace_payload(result: &RasterWorkloadResult) -> Result<Vec<u8>> {
+    std::fs::read(&result.trace_ndjson_path)
+        .wrap_err("failed to load trace payload for DA publication")
 }
 
 pub fn exec_step_metrics(result: &RasterWorkloadResult, workload: &str) -> HashMap<String, String> {

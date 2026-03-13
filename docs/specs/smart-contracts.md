@@ -32,12 +32,15 @@ claimer/challenger interaction surface for `raster-benchmarks`.
 - Contract flows are expected to run in local deterministic scenarios before
   any testnet adaptation.
 
-## Claimer/challenger interaction contract (MVP baseline)
+## Claimer/challenger interaction contract (Phase 2)
 
 `contracts/src/interfaces/IClaimVerifier.sol` defines the baseline benchmark
 interaction surface:
 
-- `submitClaim(workloadId, artifactRoot, resultRoot)` creates a pending claim.
+- `publishTrace(payload, codecId)` publishes trace payload bytes through a dedicated
+  on-chain tx path and emits `TracePublished` with payload hash/size metadata.
+- `submitClaim(workloadId, artifactRoot, resultRoot, traceTxHash, tracePayloadBytes, traceCodecId)`
+  creates a pending claim and stores a trace pointer for challenger replay.
 - `challengeClaim(claimId, observedArtifactRoot, observedResultRoot)` marks a
   claim slashed when divergence is observed.
 - `settleClaim(claimId)` settles an uncontested pending claim.
@@ -45,6 +48,16 @@ interaction surface:
 
 `contracts/src/ClaimVerifier.sol` is the benchmark reference implementation for
 this baseline interface.
+
+## Claim metadata pointer fields
+
+`Claim` now includes DA pointer fields used by challenger retrieval in later phases:
+
+- `traceTxHash` (`bytes32`) - hash of the tx that published the trace payload.
+- `tracePayloadBytes` (`uint32`) - payload byte length for decode validation.
+- `traceCodecId` (`uint8`) - trace codec discriminator (`1` = `trace.ndjson` v1).
+
+For non-DA paths (for example `workload=stub`), these fields are zeroed.
 
 ## Determinism requirements
 

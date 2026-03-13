@@ -5,6 +5,7 @@ use serde::Serialize;
 
 use crate::anvil::AnvilProvider;
 use crate::contract::IClaimVerifier;
+use crate::da::TracePublication;
 
 /// Hardcoded stub roots for the claimer.
 pub const ARTIFACT_ROOT: [u8; 32] = [0xaa; 32];
@@ -23,6 +24,9 @@ pub struct ClaimResult {
     pub workload_id: String,
     pub artifact_root: String,
     pub result_root: String,
+    pub trace_tx_hash: String,
+    pub trace_payload_bytes: u32,
+    pub trace_codec_id: u8,
     pub state: String,
 }
 
@@ -33,14 +37,29 @@ pub struct ClaimResult {
 pub async fn submit_claim(
     provider: &AnvilProvider,
     contract_address: Address,
+    trace_publication: Option<&TracePublication>,
 ) -> Result<ClaimResult> {
     let workload_id = FixedBytes::from(WORKLOAD_ID);
     let artifact_root = FixedBytes::from(ARTIFACT_ROOT);
     let result_root = FixedBytes::from(RESULT_ROOT);
 
+    let trace_tx_hash = match trace_publication {
+        Some(publication) => crate::da::parse_trace_tx_hash(&publication.trace_tx_hash)?,
+        None => alloy::primitives::B256::ZERO,
+    };
+    let trace_payload_bytes = trace_publication.map_or(0, |publication| publication.payload_bytes);
+    let trace_codec_id = trace_publication.map_or(0, |publication| publication.codec_id);
+
     let contract = IClaimVerifier::new(contract_address, provider);
     let pending = contract
-        .submitClaim(workload_id, artifact_root, result_root)
+        .submitClaim(
+            workload_id,
+            artifact_root,
+            result_root,
+            trace_tx_hash,
+            trace_payload_bytes,
+            trace_codec_id,
+        )
         .send()
         .await?;
     let receipt = pending.get_receipt().await?;
@@ -73,6 +92,9 @@ pub async fn submit_claim(
         workload_id: format!("0x{}", alloy::hex::encode(workload_id)),
         artifact_root: format!("0x{}", alloy::hex::encode(artifact_root)),
         result_root: format!("0x{}", alloy::hex::encode(result_root)),
+        trace_tx_hash: format!("0x{}", alloy::hex::encode(trace_tx_hash)),
+        trace_payload_bytes,
+        trace_codec_id,
         state: "Pending".to_string(),
     })
 }

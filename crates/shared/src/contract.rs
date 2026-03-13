@@ -15,16 +15,29 @@ sol! {
             bytes32 workloadId;
             bytes32 artifactRoot;
             bytes32 resultRoot;
+            bytes32 traceTxHash;
+            uint32 tracePayloadBytes;
+            uint8 traceCodecId;
             uint64 createdAt;
             ClaimState state;
         }
+
+        event TracePublished(
+            address indexed publisher,
+            bytes32 indexed payloadHash,
+            uint32 payloadBytes,
+            uint8 codecId
+        );
 
         event ClaimSubmitted(
             uint256 indexed claimId,
             address indexed claimer,
             bytes32 indexed workloadId,
             bytes32 artifactRoot,
-            bytes32 resultRoot
+            bytes32 resultRoot,
+            bytes32 traceTxHash,
+            uint32 tracePayloadBytes,
+            uint8 traceCodecId
         );
 
         event ClaimChallenged(
@@ -38,10 +51,18 @@ sol! {
 
         event ClaimSlashed(uint256 indexed claimId);
 
+        function publishTrace(
+            bytes calldata payload,
+            uint8 codecId
+        ) external returns (bytes32 payloadHash, uint32 payloadBytes);
+
         function submitClaim(
             bytes32 workloadId,
             bytes32 artifactRoot,
-            bytes32 resultRoot
+            bytes32 resultRoot,
+            bytes32 traceTxHash,
+            uint32 tracePayloadBytes,
+            uint8 traceCodecId
         ) external returns (uint256 claimId);
 
         function challengeClaim(

@@ -43,7 +43,7 @@ Each step in the `steps` array has:
 |---|---|---|---|
 | `exec` | Execute | `pending`, `done` | Raster program execution (`done` for real Raster workloads) |
 | `trace` | Trace | `pending`, `done` | Trace generation (`done` when trace artifacts are emitted) |
-| `da` | DA Submission | `pending` | Data availability submission (not applicable in stub phase) |
+| `da` | DA Submission | `pending`, `done` | Trace data publication step (`done` for workloads that publish DA payload) |
 | `claim` | Submit Claim | `done` | On-chain claim submission via `submitClaim()` |
 | `replay` | Replay | `done` | Replay verification step |
 | `outcome` | Outcome | `settled`, `slashed` | Final on-chain settlement or slashing outcome |
@@ -60,12 +60,22 @@ Each step in the `steps` array has:
 - `Trace file` — relative path to persisted trace artifact JSON
 - `Raster revision` — pinned Raster dependency revision used for the run
 
+**`da` metrics (`status = done`):**
+- `Blob tx hash` - publication transaction hash used as claim trace pointer
+- `Payload bytes` - published trace payload size in bytes
+- `Codec id` - trace codec discriminator (`1` = `trace.ndjson` v1)
+- `Gas used` - gas consumed by the DA publication tx
+- `Payload hash` - keccak256 hash emitted by `TracePublished`
+
 **`claim` metrics:**
 - `Claim ID` — on-chain claim identifier
 - `Tx hash` — transaction hash
 - `Gas used` — gas consumed by `submitClaim()`
 - `Artifact root` — submitted artifact root (hex)
 - `Result root` — submitted result root (hex)
+- `Trace tx hash` — pointer to the DA publication tx hash (`0x00..00` when unset)
+- `Trace payload bytes` — pointer payload byte size (`0` when unset)
+- `Trace codec id` — pointer codec id (`0` when unset)
 
 **`replay` metrics:**
 - `Replay time` — replay duration or `"n/a"` for stub

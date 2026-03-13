@@ -57,8 +57,24 @@ async fn main() -> Result<()> {
     eprintln!("ClaimVerifier deployed at {contract_address}");
 
     // 4. Claimer step — submit claim with stub roots
+    let da_publication = if let Some(result) = &raster_workload_result {
+        let trace_payload = raster_workload::load_trace_payload(result)?;
+        let publication = shared::da::publish_trace(
+            &provider,
+            contract_address,
+            trace_payload,
+            shared::da::TRACE_CODEC_NDJSON_V1,
+        )
+        .await?;
+        shared::da::persist_trace_index(&run_id, &publication)?;
+        Some(publication)
+    } else {
+        None
+    };
+
     eprintln!("Submitting claim...");
-    let claim_result = shared::claimer::submit_claim(&provider, contract_address).await?;
+    let claim_result =
+        shared::claimer::submit_claim(&provider, contract_address, da_publication.as_ref()).await?;
     eprintln!(
         "Claim submitted: id={}, gas={}",
         claim_result.claim_id, claim_result.gas_used
@@ -161,11 +177,29 @@ async fn main() -> Result<()> {
     let steps = vec![
         exec_step,
         trace_step,
-        StepOutput {
-            key: "da".to_string(),
-            label: "DA Submission".to_string(),
-            status: "pending".to_string(),
-            metrics: HashMap::new(),
+        if let Some(publication) = &da_publication {
+            StepOutput {
+                key: "da".to_string(),
+                label: "DA Submission".to_string(),
+                status: "done".to_string(),
+                metrics: HashMap::from([
+                    ("Blob tx hash".to_string(), publication.trace_tx_hash.clone()),
+                    (
+                        "Payload bytes".to_string(),
+                        publication.payload_bytes.to_string(),
+                    ),
+                    ("Codec id".to_string(), publication.codec_id.to_string()),
+                    ("Gas used".to_string(), publication.gas_used.to_string()),
+                    ("Payload hash".to_string(), publication.payload_hash.clone()),
+                ]),
+            }
+        } else {
+            StepOutput {
+                key: "da".to_string(),
+                label: "DA Submission".to_string(),
+                status: "pending".to_string(),
+                metrics: HashMap::new(),
+            }
         },
         // Claim step
         StepOutput {
@@ -179,6 +213,15 @@ async fn main() -> Result<()> {
                 m.insert("Gas used".to_string(), claim_result.gas_used.to_string());
                 m.insert("Artifact root".to_string(), claim_result.artifact_root.clone());
                 m.insert("Result root".to_string(), claim_result.result_root.clone());
+                m.insert("Trace tx hash".to_string(), claim_result.trace_tx_hash.clone());
+                m.insert(
+                    "Trace payload bytes".to_string(),
+                    claim_result.trace_payload_bytes.to_string(),
+                );
+                m.insert(
+                    "Trace codec id".to_string(),
+                    claim_result.trace_codec_id.to_string(),
+                );
                 m
             },
         },
@@ -213,7 +256,7 @@ async fn main() -> Result<()> {
     let summary = SummaryOutput {
         exec_time_ms,
         trace_size_bytes,
-        da_gas: None,
+        da_gas: da_publication.as_ref().map(|publication| publication.gas_used),
         claim_gas: claim_result.gas_used as u64,
         replay_time_ms: None,
         fraud_proof_time_ms: None,

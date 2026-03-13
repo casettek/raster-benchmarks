@@ -28,7 +28,7 @@ async fn main() -> Result<()> {
     eprintln!("ClaimVerifier deployed at {contract_address}");
 
     // Submit claim via shared library
-    let result = shared::claimer::submit_claim(&provider, contract_address).await?;
+    let result = shared::claimer::submit_claim(&provider, contract_address, None).await?;
     println!("{}", serde_json::to_string_pretty(&result)?);
 
     Ok(())

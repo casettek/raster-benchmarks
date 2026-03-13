@@ -7,26 +7,22 @@ contract ClaimVerifier is IClaimVerifier {
     uint256 private _nextClaimId = 1;
     mapping(uint256 => Claim) private _claims;
 
-    event ClaimSubmitted(
-        uint256 indexed claimId,
-        address indexed claimer,
-        bytes32 indexed workloadId,
-        bytes32 artifactRoot,
-        bytes32 resultRoot
-    );
-    event ClaimChallenged(
-        uint256 indexed claimId,
-        address indexed challenger,
-        bytes32 observedArtifactRoot,
-        bytes32 observedResultRoot
-    );
-    event ClaimSettled(uint256 indexed claimId);
-    event ClaimSlashed(uint256 indexed claimId);
+    function publishTrace(
+        bytes calldata payload,
+        uint8 codecId
+    ) external returns (bytes32 payloadHash, uint32 payloadBytes) {
+        payloadHash = keccak256(payload);
+        payloadBytes = uint32(payload.length);
+        emit TracePublished(msg.sender, payloadHash, payloadBytes, codecId);
+    }
 
     function submitClaim(
         bytes32 workloadId,
         bytes32 artifactRoot,
-        bytes32 resultRoot
+        bytes32 resultRoot,
+        bytes32 traceTxHash,
+        uint32 tracePayloadBytes,
+        uint8 traceCodecId
     ) external returns (uint256 claimId) {
         claimId = _nextClaimId++;
         _claims[claimId] = Claim({
@@ -34,6 +30,9 @@ contract ClaimVerifier is IClaimVerifier {
             workloadId: workloadId,
             artifactRoot: artifactRoot,
             resultRoot: resultRoot,
+            traceTxHash: traceTxHash,
+            tracePayloadBytes: tracePayloadBytes,
+            traceCodecId: traceCodecId,
             createdAt: uint64(block.timestamp),
             state: ClaimState.Pending
         });
@@ -43,7 +42,10 @@ contract ClaimVerifier is IClaimVerifier {
             msg.sender,
             workloadId,
             artifactRoot,
-            resultRoot
+            resultRoot,
+            traceTxHash,
+            tracePayloadBytes,
+            traceCodecId
         );
     }
 

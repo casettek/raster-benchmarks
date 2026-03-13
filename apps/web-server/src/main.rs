@@ -250,7 +250,8 @@ async fn run_pipeline(
     .await;
 
     // Submit claim
-    let claim_result = match shared::claimer::submit_claim(&state.provider, contract_address).await
+    let claim_result =
+        match shared::claimer::submit_claim(&state.provider, contract_address, None).await
     {
         Ok(r) => r,
         Err(e) => {
@@ -276,6 +277,15 @@ async fn run_pipeline(
         claim_result.artifact_root.clone(),
     );
     claim_metrics.insert("Result root".to_string(), claim_result.result_root.clone());
+    claim_metrics.insert("Trace tx hash".to_string(), claim_result.trace_tx_hash.clone());
+    claim_metrics.insert(
+        "Trace payload bytes".to_string(),
+        claim_result.trace_payload_bytes.to_string(),
+    );
+    claim_metrics.insert(
+        "Trace codec id".to_string(),
+        claim_result.trace_codec_id.to_string(),
+    );
 
     let claim_done = serde_json::json!({
         "key": "claim",

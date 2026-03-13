@@ -36,7 +36,7 @@ Uses GET with query parameters so the browser `EventSource` API can connect dire
 
 | Param      | Type   | Default     | Description |
 |------------|--------|-------------|-------------|
-| `workload` | string | `"stub"`    | Workload name (no behavioral effect in stub phase) |
+| `workload` | string | `"stub"`    | Workload name (`"raster-hello"` enables real trace generation + DA publication in CLI runner) |
 | `scenario` | string | `"honest"`  | `"honest"` or `"dishonest"` |
 
 **Response:** `text/event-stream`
@@ -76,11 +76,14 @@ data: {"message":"<error text>"}
 
 #### Step emission sequence
 
-1. `exec`, `trace`, `da` emitted immediately as `status: "pending"` (Raster steps, not yet integrated).
+1. `exec`, `trace`, `da` are emitted first as `status: "pending"` placeholders.
 2. `claim` emitted as `"running"`, then re-emitted as `"done"` with metrics after `submitClaim` tx.
 3. `replay` emitted as `"running"`, then re-emitted as `"done"` after challenger operation.
 4. `outcome` emitted as `"settled"` or `"slashed"` with final metrics.
 5. `done` event with full `RunOutput`.
+
+`claim` metrics include trace pointer fields (`Trace tx hash`, `Trace payload bytes`, `Trace codec id`).
+For stub paths these values are zeroed (`0x00..00`, `0`, `0`).
 
 ### `GET /api/runs` — List all runs
 
