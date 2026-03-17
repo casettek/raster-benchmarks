@@ -14,7 +14,8 @@ This directory contains canonical behavioral and operational specs for `raster-b
 - `docs/specs/README.md` (this file): spec index, ownership boundaries, and baseline operational contracts for the MVP foundation phase.
 - `docs/specs/program-bundle.md` (planned, Phase 1): bundle contract, identity fields, reproducibility rules.
 - `docs/specs/run-schema.md` (implemented): canonical JSON schema for `runs/*.json` run output files — data contract between runner and UI.
-- `docs/specs/local-e2e-scenarios.md` (planned, Phase 2): honest/dishonest flow assertions and expected outcomes.
+- `docs/specs/l2-kona-workload.md` (implemented, L2 POC plan 007): native Kona adapter boundary (`preCheckpoint + txBytes + blockContext -> postCheckpoint + artifacts`) and deterministic checkpoint contract.
+- `docs/specs/local-e2e-scenarios.md` (implemented, L2 POC plan 007): fixed 5-transaction L2 fixture, deterministic synthetic block window, and honest/dishonest assertion contract.
 - `docs/specs/metrics-schema.md` (planned, Phase 3): result/artifact schema and baseline comparison contract.
 - `docs/specs/smart-contracts.md` (implemented): benchmark-local contract ownership, Foundry layout, and MVP claimer/challenger interaction surface.
 

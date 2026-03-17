@@ -4048,7 +4048,6 @@ name = "raster-runtime"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "raster-compiler",
  "raster-core",
  "raster-macros",
  "raster-prover",
@@ -6439,3 +6438,8 @@ dependencies = [
  "log",
  "simd-adler32",
 ]
+
+[[patch.unused]]
+name = "cc"
+version = "1.0.79"
+source = "git+https://github.com/rust-lang/cc-rs?rev=e5bbdfa#e5bbdfa1fa468c028cb38fee6c35a3cf2e5a2736"
