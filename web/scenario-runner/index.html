@@ -648,9 +648,10 @@
         </div>
 
         <div id="tabExecute" class="tab-panel active">
-            <p id="executeHint" style="font-size:0.875rem;color:var(--text-faint);margin-bottom:0.75rem;">Run a scenario with stub data to preview the lifecycle view.</p>
+            <p id="executeHint" style="font-size:0.875rem;color:var(--text-faint);margin-bottom:0.75rem;">Run a scenario with the `l2-kona-poc` fixture-backed workload or use `stub` for a quick preview.</p>
             <div class="controls-row">
                 <select id="workloadSelect">
+                    <option value="l2-kona-poc">l2-kona-poc</option>
                     <option value="raster-hello">raster-hello</option>
                     <option value="stub">stub</option>
                 </select>

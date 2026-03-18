@@ -18,7 +18,7 @@ struct Cli {
     #[arg(long)]
     scenario: String,
 
-    /// Workload name (stub only — no behavioral effect in this phase)
+    /// Workload name (stub, raster-hello, or l2-kona-poc)
     #[arg(long, default_value = "stub")]
     workload: String,
 

@@ -1,0 +1,44 @@
+{
+  "bundle_id": "l2-poc-witness-v1",
+  "description": "Local RocksDB witness preimages for Kona StatelessL2Builder (source: kona-executor testdata block-26207960)",
+  "kv_store_ref": "fixtures/l2-poc/witness-kv-v1-block-26207960",
+  "source": "https://docs.rs/crate/kona-executor/0.4.0/source/testdata/block-26207960.tar.gz",
+  "parent_header": {
+    "parentHash": "0x3d44584ac8a9dbb5b3a18645a1c5489a64618f3fe030f53ccb124314a2bf89e3",
+    "sha3Uncles": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
+    "miner": "0x4200000000000000000000000000000000000011",
+    "stateRoot": "0x3eca587529d13f62e6e9f9eaab218a6380a435e94a0315aece34e4ea7bd0964f",
+    "transactionsRoot": "0x9eb2fe752c102fe5a8f9a43342a84d53eab9f969fe2c625b8d3ec026b67ac640",
+    "receiptsRoot": "0xc9dfa8461a2ad1e78074cc9e201ea4b7d17f632c603a7caa817eae0fbbf88f4e",
+    "logsBloom": "0x54200040003040010000000480000002000001000000002000000000000410000400220004000204001000a0800008000000000480008000000004042024000000000041000000800080002a040009200000000000840000200440200400000001000000b2000000008000000000080000440020010010e000004210400000000201004000001020000000800080400300100200001000080000005000001000022000400000000000000508000080000002000000010080200008000000004940000002080000000820018000000000000000000000001400400481000061000010000000000000000000000005000000401044008000000014420000080000",
+    "difficulty": "0x0",
+    "number": "0x18fe6d7",
+    "gasLimit": "0x3938700",
+    "gasUsed": "0x209966",
+    "timestamp": "0x67f6a95a",
+    "extraData": "0x00000000fa00000006",
+    "mixHash": "0xa18772c155b3ff852d243de553460c379a299242cc2886a38307220f50ff239d",
+    "nonce": "0x0000000000000000",
+    "baseFeePerGas": "0x10e",
+    "withdrawalsRoot": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+    "blobGasUsed": "0x0",
+    "excessBlobGas": "0x0",
+    "parentBeaconBlockRoot": "0x337505785bd172a2c0e1bac2f76b113fe4f2809441d98eacec402b4ebf82836e"
+  },
+  "source_fixture_expected_block_hash": "0xdb32d9ddfa5fd26c9fb0260bbfa53da88326aa2a465e34d75180564aa31b851e",
+  "source_payload_template": {
+    "eip1559Params": "0x000000fa00000006"
+  },
+  "closure_manifest_ref": "fixtures/l2-poc/witness-closure-manifest-v1.json",
+  "kv_store_refs": [
+    "fixtures/l2-poc/witness-kv-v1",
+    "fixtures/l2-poc/witness-kv-v1-block-26207960",
+    "fixtures/l2-poc/witness-kv-v1-block-26207961",
+    "fixtures/l2-poc/witness-kv-v1-block-26207962",
+    "fixtures/l2-poc/witness-kv-v1-block-26207963",
+    "fixtures/l2-poc/witness-kv-v1-block-26208384",
+    "fixtures/l2-poc/witness-kv-v1-block-26208858",
+    "fixtures/l2-poc/witness-kv-v1-block-26208927",
+    "fixtures/l2-poc/witness-kv-v1-block-26211680"
+  ]
+}

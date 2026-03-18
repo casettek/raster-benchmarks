@@ -15,7 +15,7 @@ and the scenario runner UI (`web/scenario-runner/index.html`).
 | Field | Type | Nullable | Description |
 |---|---|---|---|
 | `id` | `string` | no | Run identifier, format: `<ISO-timestamp>-<workload>-<scenario>` |
-| `workload` | `string` | no | Workload name (e.g., `"stub"`, `"raster-hello"`) |
+| `workload` | `string` | no | Workload name (e.g., `"stub"`, `"raster-hello"`, `"l2-kona-poc"`) |
 | `scenario` | `string` | no | Scenario name: `"honest"` or `"dishonest"` |
 | `timestamp` | `string` | no | RFC 3339 timestamp of when the run started |
 | `raster_pin` | `object` | no | Raster version pin (see below) |
@@ -152,4 +152,4 @@ runs/artifacts/<run-id>/trace.ndjson
 ## Compatibility notes
 
 - This schema must remain stable across both CLI and API/SSE producers.
-- `exec`/`trace`/`da` are `"done"` with metrics for Raster-backed workloads (for example `raster-hello`) and `"pending"` for placeholder `stub` runs.
+- `exec`/`trace`/`da` are `"done"` with metrics for workload-backed runs (for example `raster-hello`, `l2-kona-poc`) and `"pending"` for placeholder `stub` runs.
