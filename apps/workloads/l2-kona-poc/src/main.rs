@@ -1,21 +1,37 @@
+extern crate alloc;
+
+mod chunk_driver;
+mod chunk_plan;
+
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use alloy_consensus::{Header, Sealable};
 use alloy_op_evm::OpEvmFactory;
-use alloy_primitives::{Address, B256, Bytes, FixedBytes, keccak256};
+use alloy_primitives::{keccak256, Address, Bytes, FixedBytes, B256};
 use alloy_rlp::Decodable;
 use alloy_rpc_types_engine::PayloadAttributes;
 use kona_executor::{StatelessL2Builder, TrieDBProvider};
 use kona_genesis::RollupConfig;
 use kona_mpt::{NoopTrieHinter, TrieNode, TrieProvider};
 use op_alloy_rpc_types_engine::OpPayloadAttributes;
+use raster::{sequence, tile};
 use rocksdb::DB;
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::chunk_driver::{ChunkDriver, ChunkExecutionCheckpoint, ChunkFinalizedResult};
+use crate::chunk_plan::{build_chunk_plan, DEFAULT_CHUNK_SIZE};
+
+use std::cell::RefCell;
 
 const CANONICAL_FIXTURE_PATH: &str = "runs/fixtures/l2-poc-synth-fixture.json";
+const CANONICAL_RUNTIME_TILE_COUNT: usize = 10;
+
+// ---------------------------------------------------------------------------
+// Error types
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, thiserror::Error)]
 enum WorkloadError {
@@ -23,10 +39,18 @@ enum WorkloadError {
     MissingInput,
     #[error("invalid --execution-mode '{value}' (expected 'strict' or 'fallback')")]
     InvalidExecutionMode { value: String },
+    #[error("invalid --chunk-size '{value}' (expected a positive integer)")]
+    InvalidChunkSizeValue { value: String },
     #[error("fixture parse failed: {0}")]
     FixtureParse(#[from] serde_json::Error),
     #[error("invalid fixture: {0}")]
     InvalidFixture(String),
+    #[error("chunk size must be greater than 0")]
+    InvalidChunkSize,
+    #[error("invalid chunk resume: {0}")]
+    InvalidChunkResume(String),
+    #[error("explicit multi-tile runtime requires canonical chunk_size = 1 (got {chunk_size})")]
+    UnsupportedRuntimeChunkSize { chunk_size: usize },
     #[error("io error at {path}: {source}")]
     Io {
         path: String,
@@ -72,7 +96,11 @@ enum WorkloadError {
 
 type Result<T> = std::result::Result<T, WorkloadError>;
 
-#[derive(Debug, Deserialize)]
+// ---------------------------------------------------------------------------
+// Fixture and checkpoint types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct FixtureInput {
     fixture_id: String,
     pre_checkpoint: PreCheckpoint,
@@ -89,39 +117,12 @@ struct FixtureInput {
     batch_hash: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct OutputRootWitness {
     message_passer_storage_root: String,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ExecutionMode {
-    Strict,
-    Fallback,
-}
-
-impl ExecutionMode {
-    fn from_cli(value: Option<String>) -> Result<Self> {
-        match value.as_deref() {
-            None | Some("strict") => Ok(Self::Strict),
-            Some("fallback") => Ok(Self::Fallback),
-            Some(other) => Err(WorkloadError::InvalidExecutionMode {
-                value: other.to_string(),
-            }),
-        }
-    }
-
-    fn allow_fallback(self) -> bool {
-        matches!(self, Self::Fallback)
-    }
-}
-
-struct CliArgs {
-    input_json: String,
-    execution_mode: ExecutionMode,
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PreCheckpoint {
     prev_output_root: String,
     parent_header_hash: String,
@@ -132,7 +133,7 @@ struct PreCheckpoint {
     parent_beacon_block_root: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct FixtureTransaction {
     id: String,
     raw: String,
@@ -176,6 +177,88 @@ struct WitnessClosureIdentity {
     message_passer_storage_root: String,
 }
 
+// ---------------------------------------------------------------------------
+// Raster tile I/O types — lightweight and postcard-serializable
+// ---------------------------------------------------------------------------
+
+/// Output of a single chunk tile execution.
+///
+/// Every tile produces a `TileOutput`. Non-final tiles leave the finalization
+/// fields empty; the sealing tile populates them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TileOutput {
+    tile_index: usize,
+    tx_ids: Vec<String>,
+    seals_block: bool,
+    /// Populated only on the sealing tile.
+    state_root: Option<String>,
+    next_output_root: Option<String>,
+    output_root_status: Option<String>,
+    gas_used: Option<u64>,
+    block_hash: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Execution mode
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExecutionMode {
+    Strict,
+    Fallback,
+}
+
+impl ExecutionMode {
+    fn from_cli(value: Option<String>) -> Result<Self> {
+        match value.as_deref() {
+            None | Some("strict") => Ok(Self::Strict),
+            Some("fallback") => Ok(Self::Fallback),
+            Some(other) => Err(WorkloadError::InvalidExecutionMode {
+                value: other.to_string(),
+            }),
+        }
+    }
+
+    fn allow_fallback(self) -> bool {
+        matches!(self, Self::Fallback)
+    }
+}
+
+struct CliArgs {
+    input_json: String,
+    execution_mode: ExecutionMode,
+    emit_chunk_plan: bool,
+    chunk_size: usize,
+}
+
+// ---------------------------------------------------------------------------
+// Internal execution context (not passed through tile boundaries)
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+struct LoadedExecutionContext {
+    rollup_config: RollupConfig,
+    provider: DiskTrieNodeProvider,
+    parent_header: alloy_consensus::Sealed<Header>,
+    eip_1559_params: Option<FixedBytes<8>>,
+    prev_randao: B256,
+    parent_beacon_block_root: B256,
+    message_passer_storage_root: B256,
+    fee_recipient: Address,
+}
+
+struct ReferenceExecutionOutcome {
+    state_root: B256,
+    next_output_root: B256,
+    output_root_status: &'static str,
+    block_hash: Option<String>,
+    gas_used: Option<u64>,
+}
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("{error}");
@@ -188,24 +271,319 @@ fn run() -> Result<()> {
     let fixture: FixtureInput = serde_json::from_str(&args.input_json)?;
     validate_fixture(&fixture)?;
 
-    let traces = execute_fixture(&fixture, args.execution_mode)?;
-    for trace in traces {
+    // --emit-chunk-plan is a utility mode, not a Raster program execution.
+    if args.emit_chunk_plan {
+        let plan = build_chunk_plan(&fixture, args.chunk_size)?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&plan).map_err(WorkloadError::FixtureParse)?
+        );
+        return Ok(());
+    }
+
+    // Fallback mode preserves the legacy whole-block path without Raster tracing.
+    if args.execution_mode.allow_fallback() {
+        eprintln!(
+            "warning: running fixture '{}' with fallback mode enabled; strict completeness guarantees are disabled",
+            fixture.fixture_id
+        );
+        let trace = execute_fallback_block(&fixture, args.execution_mode)?;
         println!("[trace]{}", trace);
+        return Ok(());
+    }
+
+    // Strict mode: run the real Raster program with tile-level tracing.
+    ensure_canonical_runtime_shape(&fixture, args.chunk_size)?;
+
+    raster::init();
+    let result = l2_block_execution(fixture);
+    raster::finish();
+
+    // The final tile must be the sealing tile with all finalization fields set.
+    assert!(result.seals_block, "final tile must seal the block");
+
+    // Emit a machine-readable summary line for the check script and runner.
+    // This is NOT a trace record — it's a final program output summary.
+    let summary = serde_json::json!({
+        "next_output_root": result.next_output_root.as_deref().expect("sealing tile must set next_output_root"),
+        "output_root_status": result.output_root_status.as_deref().expect("sealing tile must set output_root_status"),
+        "state_root": result.state_root.as_deref().expect("sealing tile must set state_root"),
+        "gas_used": result.gas_used.expect("sealing tile must set gas_used"),
+        "block_hash": result.block_hash,
+        "tile_count": CANONICAL_RUNTIME_TILE_COUNT,
+        "tracked_tx_count": 5,
+        "supplemental_tx_count": 5,
+        "execution_tx_count": 10,
+    });
+    println!("[summary]{}", summary);
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Raster program: tile and sequence definitions
+//
+// This is the canonical Raster program shape. The #[tile] attribute auto-
+// instruments each tile function with Raster runtime tracing (serialized
+// input/output via emit_trace). The #[sequence] attribute registers the
+// tile call graph for CFS extraction.
+//
+// Traces are emitted automatically by the Raster runtime — no manual
+// [trace] printing is needed.
+// ---------------------------------------------------------------------------
+
+/// Shared execution state for the current block execution.
+///
+/// In native execution mode, a single ChunkDriver persists across all tiles
+/// within one `l2_block_execution` sequence call. The TrieDB and cumulative
+/// EVM state are carried forward in-process so later tiles can resume from
+/// where prior tiles left off without replaying from the parent checkpoint.
+///
+/// This shared state is an optimization for the native execution path. In a
+/// real zkVM execution, each tile would be an independent proving unit with
+/// its own witness data.
+struct SharedExecutionState {
+    driver: ChunkDriver,
+    checkpoint: ChunkExecutionCheckpoint,
+    context: LoadedExecutionContext,
+    payload: OpPayloadAttributes,
+}
+
+thread_local! {
+    static EXECUTION_STATE: RefCell<Option<SharedExecutionState>> = const { RefCell::new(None) };
+}
+
+fn init_shared_execution(fixture: &FixtureInput) -> Result<()> {
+    let context = load_execution_context(fixture)?;
+    let payload = build_payload(fixture, &context)?;
+    let driver = ChunkDriver::new(
+        context.rollup_config.clone(),
+        payload.clone(),
+        context.parent_header.clone(),
+        context.provider.clone(),
+        fixture.pre_checkpoint.witness_bundle_ref.clone(),
+    )?;
+    let checkpoint = driver.initial_checkpoint();
+    EXECUTION_STATE.with(|cell| {
+        *cell.borrow_mut() = Some(SharedExecutionState {
+            driver,
+            checkpoint,
+            context,
+            payload,
+        });
+    });
+    Ok(())
+}
+
+fn take_shared_execution() -> Option<SharedExecutionState> {
+    EXECUTION_STATE.with(|cell| cell.borrow_mut().take())
+}
+
+/// Top-level sequence: execute one L2 block as 10 deterministic chunk tiles.
+///
+/// Each tile executes exactly one transaction from the canonical batch.
+/// Tiles 0–4 cover tracked txs; tiles 5–9 cover supplemental txs.
+/// Tile 9 seals the block and yields the final output root.
+///
+/// The same `execute_chunk` tile function is called for every tile — it's
+/// one ELF binary that handles any tile index. The tile index parameter
+/// selects which transaction slice to execute.
+#[sequence]
+fn l2_block_execution(fixture: FixtureInput) -> TileOutput {
+    // Initialize shared execution state for this block.
+    init_shared_execution(&fixture).expect("failed to initialize execution context");
+    let c0 = execute_chunk(fixture.clone(), 0usize);
+    let c1 = execute_chunk(fixture.clone(), c0.tile_index + 1);
+    let c2 = execute_chunk(fixture.clone(), c1.tile_index + 1);
+    let c3 = execute_chunk(fixture.clone(), c2.tile_index + 1);
+    let c4 = execute_chunk(fixture.clone(), c3.tile_index + 1);
+    let c5 = execute_chunk(fixture.clone(), c4.tile_index + 1);
+    let c6 = execute_chunk(fixture.clone(), c5.tile_index + 1);
+    let c7 = execute_chunk(fixture.clone(), c6.tile_index + 1);
+    let c8 = execute_chunk(fixture.clone(), c7.tile_index + 1);
+    execute_chunk(fixture, c8.tile_index + 1)
+}
+
+/// Execute one chunk tile by index.
+///
+/// This is the single tile function for the entire L2 block execution program.
+/// It handles both non-final tiles (which advance the execution cursor) and
+/// the final sealing tile (which also runs the reference comparison and
+/// produces the output root).
+///
+/// In a zkVM context, this compiles to one ELF binary parameterized by
+/// `tile_index`. The prover invokes it N times with different indices.
+#[tile(kind = iter)]
+fn execute_chunk(fixture: FixtureInput, tile_index: usize) -> TileOutput {
+    execute_tile_shared(&fixture, tile_index)
+        .unwrap_or_else(|e| panic!("tile {tile_index} execution failed: {e}"))
+}
+
+// ---------------------------------------------------------------------------
+// Tile implementation (internal — the #[tile] wrapper above is the traced
+// entry point)
+// ---------------------------------------------------------------------------
+
+fn execute_tile_shared(fixture: &FixtureInput, tile_index: usize) -> Result<TileOutput> {
+    let chunk_plan = build_chunk_plan(fixture, DEFAULT_CHUNK_SIZE)?;
+    let tile = chunk_plan.tile(tile_index).ok_or_else(|| {
+        WorkloadError::InvalidChunkResume(format!("missing canonical tile {tile_index}"))
+    })?;
+
+    if !tile.seals_block() {
+        // --- Non-final tile: execute one tx slice, advance checkpoint ---
+        EXECUTION_STATE.with(|cell| {
+            let mut state = cell.borrow_mut();
+            let exec = state
+                .as_mut()
+                .expect("shared execution state not initialized");
+
+            match exec.driver.execute_tile(
+                std::mem::replace(&mut exec.checkpoint, exec.driver.initial_checkpoint()),
+                tile,
+            )? {
+                chunk_driver::ChunkTileExecutionOutcome::Checkpointed(next_checkpoint) => {
+                    exec.checkpoint = *next_checkpoint;
+                    Ok(TileOutput {
+                        tile_index,
+                        tx_ids: tile.tx_ids().to_vec(),
+                        seals_block: false,
+                        state_root: None,
+                        next_output_root: None,
+                        output_root_status: None,
+                        gas_used: None,
+                        block_hash: None,
+                    })
+                }
+                chunk_driver::ChunkTileExecutionOutcome::Finalized(_) => {
+                    Err(WorkloadError::InvalidChunkResume(format!(
+                        "tile {tile_index} finalized unexpectedly"
+                    )))
+                }
+            }
+        })
+    } else {
+        // --- Sealing tile: execute final tx slice, verify against reference ---
+        let batch_id = batch_id(fixture);
+        let exec = take_shared_execution().expect("shared execution state not initialized");
+
+        let finalized = match exec.driver.execute_tile(exec.checkpoint, tile)? {
+            chunk_driver::ChunkTileExecutionOutcome::Finalized(finalized) => finalized,
+            chunk_driver::ChunkTileExecutionOutcome::Checkpointed(_) => {
+                return Err(WorkloadError::InvalidChunkResume(format!(
+                    "tile {tile_index} checkpointed unexpectedly"
+                )));
+            }
+        };
+
+        let reference = execute_reference_block(
+            fixture,
+            &exec.context,
+            exec.payload,
+            ExecutionMode::Strict,
+            &batch_id,
+        )?;
+        ensure_finalized_chunk_matches_reference(&finalized, &reference)?;
+
+        Ok(TileOutput {
+            tile_index,
+            tx_ids: tile.tx_ids().to_vec(),
+            seals_block: true,
+            state_root: Some(finalized.final_state_root),
+            next_output_root: Some(format!("{:#x}", reference.next_output_root)),
+            output_root_status: Some(reference.output_root_status.to_string()),
+            gas_used: Some(finalized.final_gas_used),
+            block_hash: reference.block_hash,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared execution helpers (used by both tile path and fallback path)
+// ---------------------------------------------------------------------------
+
+fn ensure_canonical_runtime_shape(fixture: &FixtureInput, chunk_size: usize) -> Result<()> {
+    if chunk_size != DEFAULT_CHUNK_SIZE {
+        return Err(WorkloadError::UnsupportedRuntimeChunkSize { chunk_size });
+    }
+
+    let chunk_plan = build_chunk_plan(fixture, chunk_size)?;
+    if chunk_plan.tiles().len() != CANONICAL_RUNTIME_TILE_COUNT {
+        return Err(WorkloadError::InvalidFixture(format!(
+            "explicit multi-tile runtime expects exactly {CANONICAL_RUNTIME_TILE_COUNT} canonical tiles"
+        )));
     }
 
     Ok(())
 }
 
-fn execute_fixture(fixture: &FixtureInput, execution_mode: ExecutionMode) -> Result<Vec<Value>> {
-    let batch_id = batch_id(fixture);
-
-    if execution_mode.allow_fallback() {
-        eprintln!(
-            "warning: running fixture '{}' with fallback mode enabled; strict completeness guarantees are disabled",
-            fixture.fixture_id
-        );
+fn ensure_finalized_chunk_matches_reference(
+    finalized: &ChunkFinalizedResult,
+    reference: &ReferenceExecutionOutcome,
+) -> Result<()> {
+    if reference.output_root_status != "fixture_output_root" {
+        return Ok(());
     }
 
+    if finalized.final_state_root != format!("{:#x}", reference.state_root) {
+        return Err(WorkloadError::InvalidChunkResume(format!(
+            "final tile state root {} did not match reference {:#x}",
+            finalized.final_state_root, reference.state_root
+        )));
+    }
+
+    if Some(finalized.final_gas_used) != reference.gas_used {
+        return Err(WorkloadError::InvalidChunkResume(format!(
+            "final tile gas_used {} did not match reference {:?}",
+            finalized.final_gas_used, reference.gas_used
+        )));
+    }
+
+    Ok(())
+}
+
+fn execute_fallback_block(fixture: &FixtureInput, execution_mode: ExecutionMode) -> Result<Value> {
+    let batch_id = batch_id(fixture);
+    let context = load_execution_context(fixture)?;
+    let payload = build_payload(fixture, &context)?;
+    let reference = execute_reference_block(fixture, &context, payload, execution_mode, &batch_id)?;
+    Ok(build_legacy_trace_record(
+        fixture,
+        &context.parent_header,
+        &reference,
+    ))
+}
+
+fn build_legacy_trace_record(
+    fixture: &FixtureInput,
+    parent_header: &alloy_consensus::Sealed<Header>,
+    outcome: &ReferenceExecutionOutcome,
+) -> Value {
+    serde_json::json!({
+        "exec_index": 0,
+        "tile": "execute_l2_block",
+        "tx_ids": fixture.transactions.iter().map(|tx| tx.id.as_str()).collect::<Vec<_>>(),
+        "tx_hashes": fixture.transactions.iter().map(|tx| tx.hash.as_str()).collect::<Vec<_>>(),
+        "tracked_tx_count": fixture.transactions.len(),
+        "supplemental_tx_count": fixture.supplemental_transactions.len(),
+        "execution_tx_count": fixture.execution_transactions().len(),
+        "block_number": fixture.start_block,
+        "parent_block_number": parent_header.number,
+        "parent_header_hash": format!("{:#x}", parent_header.hash_slow()),
+        "prev_output_root": fixture.pre_checkpoint.prev_output_root,
+        "next_output_root": format!("{:#x}", outcome.next_output_root),
+        "output_root_status": outcome.output_root_status,
+        "batch_hash": fixture.batch_hash,
+        "block_hash": outcome.block_hash,
+        "gas_used": outcome.gas_used,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Kona execution engine
+// ---------------------------------------------------------------------------
+
+fn load_execution_context(fixture: &FixtureInput) -> Result<LoadedExecutionContext> {
     let rollup_path = resolve_ref_path(&fixture.pre_checkpoint.rollup_config_ref);
     let rollup_config = load_rollup_config(&rollup_path)?;
 
@@ -256,21 +634,29 @@ fn execute_fixture(fixture: &FixtureInput, execution_mode: ExecutionMode) -> Res
         ));
     }
 
-    let mut builder = StatelessL2Builder::new(
-        &rollup_config,
-        OpEvmFactory::default(),
+    Ok(LoadedExecutionContext {
+        rollup_config,
         provider,
-        NoopTrieHinter,
-        parent_header.clone().seal_slow(),
-    );
+        parent_header: parent_header.seal_slow(),
+        eip_1559_params,
+        prev_randao,
+        parent_beacon_block_root,
+        message_passer_storage_root,
+        fee_recipient,
+    })
+}
 
-    let payload = OpPayloadAttributes {
+fn build_payload(
+    fixture: &FixtureInput,
+    context: &LoadedExecutionContext,
+) -> Result<OpPayloadAttributes> {
+    Ok(OpPayloadAttributes {
         payload_attributes: PayloadAttributes {
             timestamp: fixture.start_timestamp,
-            prev_randao,
-            suggested_fee_recipient: fee_recipient,
+            prev_randao: context.prev_randao,
+            suggested_fee_recipient: context.fee_recipient,
             withdrawals: None,
-            parent_beacon_block_root: Some(parent_beacon_block_root),
+            parent_beacon_block_root: Some(context.parent_beacon_block_root),
         },
         gas_limit: Some(fixture.gas_limit),
         transactions: Some(
@@ -281,77 +667,81 @@ fn execute_fixture(fixture: &FixtureInput, execution_mode: ExecutionMode) -> Res
                 .collect::<Result<Vec<_>>>()?,
         ),
         no_tx_pool: None,
-        eip_1559_params,
-    };
-
-    let (next_output_root, output_root_status, block_hash, gas_used) =
-        match builder.build_block(payload) {
-            Ok(outcome) => (
-                seeded_output_root(
-                    outcome.header.state_root,
-                    message_passer_storage_root,
-                    outcome.header.hash(),
-                ),
-                "fixture_output_root",
-                Some(format!("{:#x}", outcome.header.hash())),
-                Some(outcome.execution_result.gas_used),
-            ),
-            Err(error) => {
-                let reason = error.to_string();
-                if let Some(class) = missing_witness_class(&reason) {
-                    if execution_mode.allow_fallback() {
-                        (
-                            synthetic_next_output_root(
-                                &fixture.pre_checkpoint.prev_output_root,
-                                &fixture.batch_hash,
-                                fixture.start_block,
-                                fixture.start_timestamp,
-                            ),
-                            "synthetic_incomplete_witness",
-                            None,
-                            None,
-                        )
-                    } else {
-                        return Err(WorkloadError::MissingWitness {
-                            step_index: 0,
-                            tx_id: batch_id.clone(),
-                            class,
-                            detail: reason,
-                        });
-                    }
-                } else {
-                    return Err(WorkloadError::KonaExecution {
-                        tx_id: batch_id,
-                        reason,
-                    });
-                }
-            }
-        };
-
-    Ok(vec![json!({
-        "exec_index": 0,
-        "tile": "execute_l2_block",
-        "tx_ids": fixture.transactions.iter().map(|tx| tx.id.as_str()).collect::<Vec<_>>(),
-        "tx_hashes": fixture.transactions.iter().map(|tx| tx.hash.as_str()).collect::<Vec<_>>(),
-        "tracked_tx_count": fixture.transactions.len(),
-        "supplemental_tx_count": fixture.supplemental_transactions.len(),
-        "execution_tx_count": fixture.execution_transactions().len(),
-        "block_number": fixture.start_block,
-        "parent_block_number": parent_header.number,
-        "parent_header_hash": format!("{:#x}", parent_header.hash_slow()),
-        "prev_output_root": fixture.pre_checkpoint.prev_output_root,
-        "next_output_root": format!("{next_output_root:#x}"),
-        "output_root_status": output_root_status,
-        "batch_hash": fixture.batch_hash,
-        "block_hash": block_hash,
-        "gas_used": gas_used,
-    })])
+        eip_1559_params: context.eip_1559_params,
+    })
 }
+
+fn execute_reference_block(
+    fixture: &FixtureInput,
+    context: &LoadedExecutionContext,
+    payload: OpPayloadAttributes,
+    execution_mode: ExecutionMode,
+    batch_id: &str,
+) -> Result<ReferenceExecutionOutcome> {
+    let mut builder = StatelessL2Builder::new(
+        &context.rollup_config,
+        OpEvmFactory::default(),
+        context.provider.clone(),
+        NoopTrieHinter,
+        context.parent_header.clone(),
+    );
+
+    match builder.build_block(payload) {
+        Ok(outcome) => Ok(ReferenceExecutionOutcome {
+            state_root: outcome.header.state_root,
+            next_output_root: seeded_output_root(
+                outcome.header.state_root,
+                context.message_passer_storage_root,
+                outcome.header.hash(),
+            ),
+            output_root_status: "fixture_output_root",
+            block_hash: Some(format!("{:#x}", outcome.header.hash())),
+            gas_used: Some(outcome.execution_result.gas_used),
+        }),
+        Err(error) => {
+            let reason = error.to_string();
+            if let Some(class) = missing_witness_class(&reason) {
+                if execution_mode.allow_fallback() {
+                    Ok(ReferenceExecutionOutcome {
+                        state_root: context.parent_header.state_root,
+                        next_output_root: synthetic_next_output_root(
+                            &fixture.pre_checkpoint.prev_output_root,
+                            &fixture.batch_hash,
+                            fixture.start_block,
+                            fixture.start_timestamp,
+                        ),
+                        output_root_status: "synthetic_incomplete_witness",
+                        block_hash: None,
+                        gas_used: None,
+                    })
+                } else {
+                    Err(WorkloadError::MissingWitness {
+                        step_index: 0,
+                        tx_id: batch_id.to_string(),
+                        class,
+                        detail: reason,
+                    })
+                }
+            } else {
+                Err(WorkloadError::KonaExecution {
+                    tx_id: batch_id.to_string(),
+                    reason,
+                })
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CLI argument parsing
+// ---------------------------------------------------------------------------
 
 fn parse_args() -> Result<CliArgs> {
     let mut args = env::args().skip(1);
     let mut input_json: Option<String> = None;
     let mut execution_mode: Option<String> = None;
+    let mut emit_chunk_plan = false;
+    let mut chunk_size = DEFAULT_CHUNK_SIZE;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -361,25 +751,40 @@ fn parse_args() -> Result<CliArgs> {
             "--execution-mode" => {
                 execution_mode = args.next();
             }
+            "--emit-chunk-plan" => {
+                emit_chunk_plan = true;
+            }
+            "--chunk-size" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| WorkloadError::InvalidChunkSizeValue {
+                        value: "<missing>".to_string(),
+                    })?;
+                chunk_size = value
+                    .parse()
+                    .map_err(|_| WorkloadError::InvalidChunkSizeValue {
+                        value: value.clone(),
+                    })?;
+            }
             _ => {}
         }
+    }
+
+    if chunk_size == 0 {
+        return Err(WorkloadError::InvalidChunkSize);
     }
 
     Ok(CliArgs {
         input_json: input_json.ok_or(WorkloadError::MissingInput)?,
         execution_mode: ExecutionMode::from_cli(execution_mode)?,
+        emit_chunk_plan,
+        chunk_size,
     })
 }
 
-fn missing_witness_class(error: &str) -> Option<&'static str> {
-    if error.contains("missing trie preimage") {
-        Some("trie-node")
-    } else if error.contains("missing bytecode preimage") {
-        Some("bytecode")
-    } else {
-        None
-    }
-}
+// ---------------------------------------------------------------------------
+// Fixture validation
+// ---------------------------------------------------------------------------
 
 fn validate_fixture(fixture: &FixtureInput) -> Result<()> {
     if fixture.transactions.len() != 5 {
@@ -560,12 +965,26 @@ fn validate_witness_closure_manifest(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Utility functions
+// ---------------------------------------------------------------------------
+
 impl FixtureInput {
     fn execution_transactions(&self) -> Vec<&FixtureTransaction> {
         self.transactions
             .iter()
             .chain(self.supplemental_transactions.iter())
             .collect()
+    }
+}
+
+fn missing_witness_class(error: &str) -> Option<&'static str> {
+    if error.contains("missing trie preimage") {
+        Some("trie-node")
+    } else if error.contains("missing bytecode preimage") {
+        Some("bytecode")
+    } else {
+        None
     }
 }
 
@@ -726,6 +1145,10 @@ fn batch_id(fixture: &FixtureInput) -> String {
     format!("batch[{ids}]")
 }
 
+// ---------------------------------------------------------------------------
+// Disk-backed trie node provider (RocksDB)
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone)]
 struct DiskTrieNodeProvider {
     dbs: Vec<Arc<DB>>,
@@ -784,6 +1207,10 @@ impl TrieDBProvider for DiskTrieNodeProvider {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -801,27 +1228,167 @@ mod tests {
     }
 
     #[test]
-    fn strict_canonical_fixture_executes_full_batch_without_missing_witness() {
+    fn strict_canonical_fixture_executes_all_tiles() {
         let fixture = canonical_fixture();
-        let traces = execute_fixture(&fixture, ExecutionMode::Strict)
-            .expect("strict canonical fixture should execute without missing witness data");
+        ensure_canonical_runtime_shape(&fixture, DEFAULT_CHUNK_SIZE)
+            .expect("canonical runtime shape should be valid");
 
-        assert_eq!(traces.len(), 1);
-        let trace = &traces[0];
-        assert_eq!(trace["output_root_status"], "fixture_output_root");
-        assert_eq!(trace["tracked_tx_count"], 5);
-        assert_eq!(trace["execution_tx_count"], 10);
-        assert_eq!(trace["block_number"], fixture.start_block);
+        let result = l2_block_execution(fixture);
+
+        assert_eq!(result.tile_index, 9);
+        assert!(result.seals_block);
+        assert_eq!(
+            result.output_root_status.as_deref(),
+            Some("fixture_output_root")
+        );
+        assert!(result.gas_used.unwrap_or(0) > 0);
+        assert!(result.block_hash.is_some());
     }
 
     #[test]
     fn strict_canonical_fixture_is_deterministic_across_repeated_runs() {
         let fixture = canonical_fixture();
-        let run_one = execute_fixture(&fixture, ExecutionMode::Strict)
-            .expect("first strict canonical execution should succeed");
-        let run_two = execute_fixture(&fixture, ExecutionMode::Strict)
-            .expect("second strict canonical execution should succeed");
 
-        assert_eq!(run_one, run_two);
+        let run_one = l2_block_execution(fixture.clone());
+        let run_two = l2_block_execution(fixture);
+
+        assert_eq!(run_one.next_output_root, run_two.next_output_root);
+        assert_eq!(run_one.state_root, run_two.state_root);
+        assert_eq!(run_one.gas_used, run_two.gas_used);
+        assert_eq!(run_one.block_hash, run_two.block_hash);
+    }
+
+    #[test]
+    fn strict_runtime_rejects_noncanonical_chunk_size() {
+        let fixture = canonical_fixture();
+        let error = ensure_canonical_runtime_shape(&fixture, 2)
+            .expect_err("strict runtime should reject non-canonical chunk sizes");
+
+        assert!(matches!(
+            error,
+            WorkloadError::UnsupportedRuntimeChunkSize { chunk_size: 2 }
+        ));
+    }
+
+    #[test]
+    fn canonical_chunk_plan_defaults_to_one_tx_tiles() {
+        let fixture = canonical_fixture();
+        let plan = build_chunk_plan(&fixture, DEFAULT_CHUNK_SIZE)
+            .expect("chunk planning should succeed for canonical fixture");
+        let plan_json = serde_json::to_value(plan).expect("chunk plan should serialize");
+
+        assert_eq!(plan_json["chunking_policy"]["kind"], "fixed-tx-count");
+        assert_eq!(plan_json["chunking_policy"]["chunk_size"], 1);
+        assert_eq!(plan_json["chunking_policy"]["execution_tx_count"], 10);
+        let tiles = plan_json["tiles"]
+            .as_array()
+            .expect("tiles should be an array");
+        assert_eq!(tiles.len(), 10);
+        assert_eq!(tiles[0]["tx_ids"], serde_json::json!(["alice_to_bob_1"]));
+        assert_eq!(tiles[4]["tx_ids"], serde_json::json!(["alice_to_bob_2"]));
+        assert_eq!(tiles[5]["tx_ids"], serde_json::json!(["supporting_tx_1"]));
+        assert_eq!(tiles[9]["seals_block"], true);
+        assert_eq!(
+            tiles[9]["output_checkpoint"]["checkpoint_kind"],
+            "sealed_block_checkpoint"
+        );
+    }
+
+    #[test]
+    fn chunk_plan_is_deterministic_for_same_fixture() {
+        let fixture = canonical_fixture();
+        let plan_one = build_chunk_plan(&fixture, DEFAULT_CHUNK_SIZE)
+            .expect("first chunk plan should succeed");
+        let plan_two = build_chunk_plan(&fixture, DEFAULT_CHUNK_SIZE)
+            .expect("second chunk plan should succeed");
+
+        let json_one = serde_json::to_value(plan_one).expect("first chunk plan should serialize");
+        let json_two = serde_json::to_value(plan_two).expect("second chunk plan should serialize");
+        assert_eq!(json_one, json_two);
+    }
+
+    #[test]
+    fn chunk_driver_matches_reference_state_root_and_gas() {
+        let fixture = canonical_fixture();
+        let context = load_execution_context(&fixture).expect("execution context should load");
+        let payload = build_payload(&fixture, &context).expect("payload should build");
+        let plan = build_chunk_plan(&fixture, DEFAULT_CHUNK_SIZE).expect("chunk plan should build");
+        let driver = ChunkDriver::new(
+            context.rollup_config.clone(),
+            payload.clone(),
+            context.parent_header.clone(),
+            context.provider.clone(),
+            fixture.pre_checkpoint.witness_bundle_ref.clone(),
+        )
+        .expect("chunk driver should build");
+        let chunk_result = driver
+            .execute_plan(&plan)
+            .expect("chunked execution should succeed");
+        let reference = execute_reference_block(
+            &fixture,
+            &context,
+            payload,
+            ExecutionMode::Strict,
+            &batch_id(&fixture),
+        )
+        .expect("reference execution should succeed");
+
+        assert_eq!(
+            chunk_result.final_state_root,
+            format!("{:#x}", reference.state_root)
+        );
+        assert_eq!(Some(chunk_result.final_gas_used), reference.gas_used);
+    }
+
+    #[test]
+    fn chunk_driver_resumes_from_checkpoint_cursor() {
+        let fixture = canonical_fixture();
+        let context = load_execution_context(&fixture).expect("execution context should load");
+        let payload = build_payload(&fixture, &context).expect("payload should build");
+        let plan = build_chunk_plan(&fixture, DEFAULT_CHUNK_SIZE).expect("chunk plan should build");
+        let driver = ChunkDriver::new(
+            context.rollup_config,
+            payload,
+            context.parent_header,
+            context.provider,
+            fixture.pre_checkpoint.witness_bundle_ref.clone(),
+        )
+        .expect("chunk driver should build");
+
+        let checkpoint = driver.initial_checkpoint();
+        let checkpoint = match driver
+            .execute_tile(checkpoint, &plan.tiles()[0])
+            .expect("first tile should succeed")
+        {
+            chunk_driver::ChunkTileExecutionOutcome::Checkpointed(checkpoint) => *checkpoint,
+            chunk_driver::ChunkTileExecutionOutcome::Finalized(_) => {
+                panic!("first tile should not finalize block")
+            }
+        };
+
+        assert_eq!(checkpoint.tx_cursor(), 1);
+
+        let checkpoint = match driver
+            .execute_tile(checkpoint, &plan.tiles()[1])
+            .expect("second tile should resume from checkpoint")
+        {
+            chunk_driver::ChunkTileExecutionOutcome::Checkpointed(checkpoint) => *checkpoint,
+            chunk_driver::ChunkTileExecutionOutcome::Finalized(_) => {
+                panic!("second tile should not finalize block")
+            }
+        };
+
+        assert_eq!(checkpoint.tx_cursor(), 2);
+    }
+
+    #[test]
+    fn nonfinal_tile_returns_correct_output() {
+        let fixture = canonical_fixture();
+        init_shared_execution(&fixture).expect("shared execution init should succeed");
+        let result = execute_tile_shared(&fixture, 0).expect("tile 0 should execute successfully");
+
+        assert_eq!(result.tile_index, 0);
+        assert!(!result.seals_block);
+        assert!(!result.tx_ids.is_empty());
     }
 }

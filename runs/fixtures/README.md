@@ -7,6 +7,7 @@ These fixtures are stable `RunOutput` samples used by regression tests in
 - `raster-hello-dishonest.json` - replay diverges and trace fetch is required
 - `l2-poc-synth-fixture.json` - canonical repo-owned synthetic L2 fixture input contract (seeded checkpoint + 5 tracked txs + 5 supplemental block txs + seeded output-root witness)
 - `l2-poc-synth-fixture.json` is consumed directly by workload id `l2-kona-poc` via `--input` for the plan-008.6 canonical strict path
+- `l2-poc-synth-chunk-plan-v1.json` - canonical phase-008.7 chunk-plan sidecar that partitions the same 10 execution txs into deterministic one-tx replay tiles
 - `l2-poc-plan7-fixture.json` remains as the legacy bootstrap/reference package used to generate the synthetic canonical fixture
 - Local witness artifacts for the L2 fixture live under `fixtures/l2-poc/`:
   - `rollup-config-v1.json`
@@ -27,6 +28,12 @@ Refresh the witness closure manifest alone with:
 python3 scripts/generate_l2_poc_witness_manifest.py
 ```
 
+Refresh the canonical chunk-plan sidecar with:
+
+```bash
+scripts/generate_l2_poc_chunk_plan.sh
+```
+
 Run strict canonical acceptance (double-run determinism + strict Kona status):
 
 ```bash
@@ -38,3 +45,12 @@ txs: the five tracked txs, the five additional canonical block txs needed to
 close the block without skipping execution, and a seeded
 `message_passer_storage_root` used for deterministic output-root hashing inside
 the workload.
+
+The chunk-plan sidecar keeps replay boundaries serializable before the resumable
+multi-tile executor lands: tile `0` starts from `pre_checkpoint`, tiles `0..=4`
+cover the tracked txs, tiles `5..=9` cover the supplemental txs, and the last
+tile is the only block-sealing chunk.
+
+As of phase 008.7 phase 2, strict canonical execution also replays those slices
+through an internal resumable chunk driver and checkpoints after each non-final
+tile, but the public trace output is still one sealed-block record.

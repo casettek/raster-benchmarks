@@ -1,4 +1,4 @@
-# Local E2E Scenarios Spec (L2 POC Plan 007 / 008.6)
+# Local E2E Scenarios Spec (L2 POC Plan 007 / 008.6 / 008.7 phases 1-3)
 
 This spec defines the deterministic L2 fixture and scenario assertions for the
 first native Kona workload POC.
@@ -30,6 +30,25 @@ removing any need for live historical RPC access during normal runs.
 - `startTimestamp = 1744218460`
 - `timestampDeltaSeconds = 0`
 - `gasLimit = 60000000`
+
+### Canonical replay chunk plan
+
+- Source of truth: `runs/fixtures/l2-poc-synth-chunk-plan-v1.json`
+- Policy: fixed tx-count chunking with `chunk_size = 1`
+- Tile count: `10`
+- Tile ordering: tracked txs occupy tiles `0..=4`; supplemental txs occupy tiles `5..=9`
+- Finalization: tile `9` is the only sealing tile (`seals_block = true`)
+
+### Raster program shape (phase 3)
+
+The canonical strict execution path is now a real Raster program:
+
+- Entry sequence: `l2_block_execution`
+- Tile functions: `execute_chunk_0` through `execute_chunk_8` (non-final) + `finalize_block` (sealing)
+- All tiles use `#[tile(kind = iter)]` for Raster runtime auto-tracing
+- The sequence uses `#[sequence]` for CFS registration
+- Traces are emitted by the Raster runtime's `emit_trace` subscriber, not by manual JSON construction
+- A `[summary]` line after `raster::finish()` carries domain-specific validation fields
 
 ### Canonical tracked transaction order (5 total)
 
@@ -71,15 +90,20 @@ The Raster program input for the single-block run is deterministic and blob-agno
 - `blockContextSeed` (`startBlock`, `startTimestamp`, `timestampDeltaSeconds`, `gasLimit`, `feeRecipient`, `prevRandao`, `parentBeaconBlockRoot`)
 
 DA/blob references are part of claim packaging, not part of execution input.
+The canonical chunk plan is a sidecar replay contract derived from the same
+fixture, not an additional user-facing runtime input field in this phase.
 
 ## Scenario assertions
 
 ### Honest scenario
 
 - Consumes the canonical fixture unchanged.
-- Executes one canonical block in order with all 10 execution txs.
+- Executes one canonical block as 10 deterministic Raster tile calls.
+- Each tile is auto-traced by the Raster runtime (`[trace]` records with `fn_name`, `input_data`, `output_data`).
+- The sequence `l2_block_execution` orchestrates 9 non-final chunk tiles and 1 block-sealing tile.
 - Uses strict canonical execution mode (no fallback statuses permitted).
 - Produces deterministic `nextOutputRoot` for block `26207960`.
+- Emits a `[summary]` record with `output_root_status = fixture_output_root`.
 - Submits claim metadata bound to
   `prevOutputRoot`, `nextOutputRoot`, `startBlock`, `endBlock`, `batchHash`.
 

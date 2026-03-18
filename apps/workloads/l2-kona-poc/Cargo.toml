@@ -10,8 +10,10 @@ std = []
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+raster = { path = "../../../../raster/crates/raster", default-features = false, features = ["std"] }
 alloy-consensus = "1.0.23"
 alloy-eips = "1.0.30"
+alloy-evm = "0.14.0"
 alloy-op-evm = "0.14.0"
 alloy-primitives = "1.2.1"
 alloy-rlp = "0.3.12"
@@ -19,6 +21,8 @@ alloy-rpc-types-engine = "1.0.23"
 kona-executor = "0.4.0"
 kona-genesis = { version = "0.4.0", features = ["serde"] }
 kona-mpt = "0.3.0"
+op-alloy-consensus = "0.18.14"
 op-alloy-rpc-types-engine = "0.18.14"
+revm = { version = "27.0.2", features = ["serde"] }
 rocksdb = "0.23.0"
 thiserror = "2.0.18"
