@@ -1,15 +1,18 @@
-# L2 Kona Workload Spec (Plan 008 / 008.5 / 008.6 / 008.7 phases 1-3)
+# L2 Kona Workload Spec
 
-This spec defines the v1 native Kona adapter boundary and checkpoint contract for
-the first L2 POC workload.
+This spec defines the native Kona adapter boundary and checkpoint contract for
+the L2 POC workload.
 
 ## Scope
 
 - One fixed 5-transaction benchmark batch.
-- One canonical Raster program that executes the batch as 10 deterministic tile calls.
-- One explicit Raster transition that executes the 5 benchmark txs plus any supplemental txs required to close the canonical block.
-- One canonical chunk-plan sidecar that partitions the same 10 execution txs into deterministic replay slices (default `chunk_size = 1`).
-- Native-only execution path (no `Risc0` guest/host flow in this phase).
+- One canonical Raster program that executes the batch as 10 deterministic tile
+  invocations of a single `execute_chunk` tile function.
+- One explicit Raster transition that executes the 5 benchmark txs plus any
+  supplemental txs required to close the canonical block.
+- One canonical chunk-plan sidecar that partitions the same 10 execution txs
+  into deterministic replay slices (default `chunk_size = 1`).
+- Native-only execution path (no Risc0 guest/host flow in this phase).
 
 Out of scope for this spec:
 
@@ -17,7 +20,7 @@ Out of scope for this spec:
 - Runner/web UX details.
 - Fraud-proof object generation and proof verification.
 
-## Current execution boundary
+## Execution boundary
 
 The execution boundary is explicit and serializable:
 
@@ -26,7 +29,8 @@ The execution boundary is explicit and serializable:
 ### `preCheckpoint` (required)
 
 - `prev_output_root` (`bytes32`): prior agreed OP `outputRoot`.
-- `parent_header_hash` (`bytes32`): expected `parentHash` value in the witness-bundle parent header.
+- `parent_header_hash` (`bytes32`): expected `parentHash` value in the
+  witness-bundle parent header.
 - `parent_block_number` (`u64`): parent L2 block number.
 - `rollup_config_ref` (`string`): rollup config handle/version used by adapter.
 - `chain_id` (`u64`): chain id for typed tx decode/validation.
@@ -38,15 +42,15 @@ The execution boundary is explicit and serializable:
 
 ### `supplementalTxBytes` (required)
 
-- Additional canonical signed tx bytes required to execute the full block without
-  missing witness data.
+- Additional canonical signed tx bytes required to execute the full block
+  without missing witness data.
 - For the current fixture, 5 supplemental txs are appended to the tracked batch,
   producing 10 executed txs total.
 
 ### `outputRootWitness` (required)
 
-- `message_passer_storage_root` (`bytes32`): pinned storage root used to hash the
-  OP output root after block execution.
+- `message_passer_storage_root` (`bytes32`): pinned storage root used to hash
+  the OP output root after block execution.
 
 ### `blockContext` (required)
 
@@ -73,21 +77,21 @@ The execution boundary is explicit and serializable:
 - `receipt_root` (`bytes32`, optional until executor output is wired)
 - `logs_bloom` (`bytes`, optional until executor output is wired)
 
-## Plan 008.7 phases 1-2 chunk plan and driver contract
+## Chunk plan and driver contract
 
-The canonical replay partition is now defined by:
+The canonical replay partition is defined by:
 
 - `runs/fixtures/l2-poc-synth-chunk-plan-v1.json`
 - `scripts/generate_l2_poc_chunk_plan.sh`
 
 ### Progression model
 
-- Uniform `execute_chunk` tiles.
+- Uniform `execute_chunk` tiles — one tile function, invoked N times.
 - Tile 0 starts from `preCheckpoint`.
-- Each non-final tile emits a resumable `chunk_checkpoint`.
-- The final tile seals the canonical block and emits the final block checkpoint.
+- Each non-final tile advances the execution cursor.
+- The final tile seals the canonical block and emits the output root.
 
-### Initial deterministic chunking rule
+### Deterministic chunking rule
 
 - Policy kind: `fixed-tx-count`
 - `chunk_size = 1`
@@ -130,35 +134,41 @@ Finalization-only fields on the sealing tile:
 - `sealed_block_hash`
 - `total_gas_used`
 
-## Plan 008.7 phase 3 Raster program contract
+## Raster program contract
 
-Phase 3 restructures the workload as a canonical Raster program where tiles and
-sequences are authored using the `raster` crate's `#[tile]` and `#[sequence]`
-attributes, and trace records are emitted by the Raster runtime — not by manual
-JSON construction.
+The workload is a canonical Raster program where tiles and sequences are
+authored using the `raster` crate's `#[tile]` and `#[sequence]` attributes,
+and trace records are emitted by the Raster runtime — not by manual JSON
+construction.
 
 ### Raster program shape
 
-The program entry is the `l2_block_execution` sequence which orchestrates 10
-explicit tile calls:
+```
+#[sequence]
+fn l2_block_execution(fixture) -> TileOutput
+    calls execute_chunk(fixture, 0)
+    calls execute_chunk(fixture, 1)
+    ...
+    calls execute_chunk(fixture, 9)
 
-- 9 non-final tiles: `execute_chunk_0` through `execute_chunk_8`
-- 1 final (block-sealing) tile: `finalize_block`
+#[tile(kind = iter)]
+fn execute_chunk(fixture, tile_index) -> TileOutput
+```
 
-Each tile is annotated with `#[tile(kind = iter)]` which auto-instruments the
-function to serialize inputs/outputs via postcard and emit a `[trace]` record
-through the Raster runtime's `emit_trace` subscriber.
+One sequence. One tile function. Ten invocations. The tile index parameter
+selects which transaction slice to execute. In a zkVM context, this compiles
+to one ELF binary parameterized by `tile_index`.
 
 ### Trace output format
 
-Strict mode now emits:
+Strict mode emits:
 
-- 10 Raster-native `[trace]` records (one per tile), each containing:
-  - `fn_name` — the tile function name (e.g. `execute_chunk_0`, `finalize_block`)
-  - `input_data` — postcard-serialized tile inputs
-  - `output_data` — postcard-serialized tile outputs
+- 10 Raster-native `[trace]` records (one per tile invocation), each containing:
+  - `fn_name` — always `execute_chunk`
+  - `input_data` — postcard-serialized tile inputs (fixture + tile_index)
+  - `output_data` — postcard-serialized `TileOutput`
   - `inputs` — parameter metadata (name and type for each parameter)
-  - `output_type` — return type as a string
+  - `output_type` — `TileOutput`
 - 1 `[summary]` record (after `raster::finish()`) containing domain-specific
   validation fields:
   - `next_output_root`, `output_root_status`, `state_root`, `gas_used`
@@ -169,11 +179,11 @@ Fallback mode preserves the legacy whole-block path and emits a single
 
 ### Shared execution state
 
-In native execution mode, a single `ChunkDriver` persists across all tiles
-within one `l2_block_execution` sequence call via thread-local storage. The
-TrieDB and cumulative EVM state are carried forward in-process so later tiles
-can resume from where prior tiles left off without replaying from the parent
-checkpoint.
+In native execution mode, a single `ChunkDriver` persists across all tile
+invocations within one `l2_block_execution` sequence call via thread-local
+storage. The TrieDB and cumulative EVM state are carried forward in-process
+so later tiles can resume from where prior tiles left off without replaying
+from the parent checkpoint.
 
 This shared state is an optimization for the native execution path. In a real
 zkVM execution, each tile would be an independent proving unit with its own
@@ -181,13 +191,12 @@ witness data.
 
 ## Canonical fixture contract
 
-The first L2 POC uses canonical synthetic fixture inputs from
+The L2 POC uses canonical synthetic fixture inputs from
 `runs/fixtures/l2-poc-synth-fixture.json`.
 
-The current plan-008.6 slice re-homes that package under repo control with a
-deterministic local regeneration path. The underlying witness snapshot lineage
-is still bootstrap-derived from vendored Kona test fixtures, but canonical runs
-no longer depend on external historical RPC reads.
+The fixture package is repo-owned with a deterministic local regeneration path.
+The underlying witness snapshot lineage is bootstrap-derived from vendored Kona
+test fixtures, but canonical runs do not depend on external historical RPC reads.
 
 ### Fixed block target
 
@@ -201,8 +210,6 @@ no longer depend on external historical RPC reads.
 - `fixtureId = l2-poc-synth-v1`
 
 ## Claim-facing mapping contract
-
-Plan 008.6 keeps the claim-facing mapping stable for later settlement phases:
 
 - `prevOutputRoot = preCheckpoint.prev_output_root`
 - `nextOutputRoot = postCheckpoint.next_output_root` from the sealed block
@@ -230,21 +237,28 @@ executor failures.
 
 - Workload entrypoint: `apps/workloads/l2-kona-poc/src/main.rs`
 - Workload id: `l2-kona-poc` (wired through `crates/shared/src/raster_workload.rs`)
-- Input contract: the full fixture JSON (`runs/fixtures/l2-poc-synth-fixture.json`) is passed directly via `--input`
-- Chunk-plan artifact: `runs/fixtures/l2-poc-synth-chunk-plan-v1.json` is generated from the canonical fixture via `scripts/generate_l2_poc_chunk_plan.sh`
-- Local witness artifacts: `fixtures/l2-poc/rollup-config-v1.json` + `fixtures/l2-poc/synthetic-witness-bundle-v1.json` + `fixtures/l2-poc/synthetic-witness-kv-v1*`
-- Runtime execution shape: 10 Raster-native `[trace]` records plus 1 `[summary]` record
-- Raster program shape: `#[sequence] fn l2_block_execution` orchestrates 10 `#[tile(kind = iter)]` calls
-- Strict runtime path: the `raster::init()` / `raster::finish()` lifecycle manages trace emission; a shared `ChunkDriver` persists across tiles via thread-local storage
-- Fallback runtime path: exploratory fallback mode still uses the existing whole-block path and emits a single legacy `[trace]` record
-- Planning flags: `--emit-chunk-plan` prints the canonical chunk-plan JSON and `--chunk-size` selects the deterministic fixed-tx partition size used for planning output
-- Execution mode per run:
-  - strict canonical mode (`--execution-mode strict`, default): runs the Raster program with tile-level tracing
-  - fallback dev mode (`--execution-mode fallback`): preserves the legacy whole-block path for exploratory runs
-  - runner override: set `L2_KONA_EXECUTION_MODE=fallback` to force exploratory mode when running through `apps/runner`
-- Strict preflight now validates the witness closure manifest contract before execution: bundle ref, rollup-config ref, tracked tx hashes, supplemental tx hashes, block window, output-root witness, and all referenced witness KV-store paths must match the canonical package.
+- Source modules:
+  - `main.rs` — Raster program (sequence + tile), CLI, fixture validation, Kona
+    reference execution, TrieDB provider
+  - `chunk_plan.rs` — deterministic transaction partitioning into tiles
+  - `chunk_driver.rs` — per-tile EVM execution engine using Kona/alloy-op-evm
+- Input contract: the full fixture JSON is passed via `--input`
+- Chunk-plan artifact: `runs/fixtures/l2-poc-synth-chunk-plan-v1.json` generated
+  via `scripts/generate_l2_poc_chunk_plan.sh`
+- Local witness artifacts: `fixtures/l2-poc/rollup-config-v1.json` +
+  `fixtures/l2-poc/synthetic-witness-bundle-v1.json` +
+  `fixtures/l2-poc/synthetic-witness-kv-v1*`
+- Execution mode:
+  - strict canonical mode (`--execution-mode strict`, default): runs the Raster
+    program with tile-level tracing
+  - fallback dev mode (`--execution-mode fallback`): whole-block execution for
+    exploratory runs
+- Strict preflight validates the witness closure manifest contract before
+  execution: bundle ref, rollup-config ref, tracked tx hashes, supplemental tx
+  hashes, block window, output-root witness, and all referenced witness KV-store
+  paths must match the canonical package.
 
-## Witness closure manifest contract (Plan 008.5 / 008.6)
+## Witness closure manifest contract
 
 Canonical witness closure is pinned by:
 
@@ -253,8 +267,8 @@ Canonical witness closure is pinned by:
 
 The manifest binds fixture identity (`fixture_id`, `batch_hash`, tracked tx
 hashes, supplemental tx hashes, block target, parent checkpoint anchor, seeded
-output-root witness) to deterministic content hashes for
-every referenced witness KV store.
+output-root witness) to deterministic content hashes for every referenced
+witness KV store.
 
 Regenerate the canonical synthetic package deterministically with:
 
@@ -274,7 +288,7 @@ Refresh the canonical chunk-plan sidecar with:
 scripts/generate_l2_poc_chunk_plan.sh
 ```
 
-## Acceptance gate command (strict canonical mode)
+## Acceptance gate
 
 Run the strict acceptance check with:
 
@@ -284,11 +298,9 @@ scripts/check_l2_kona_strict.sh
 
 Pass criteria:
 
-- Exactly 10 Raster-native trace records per run (one per tile).
-- Each trace contains `fn_name` matching the expected tile function names.
+- Exactly 10 Raster-native trace records per run (one per tile invocation).
+- Every trace has `fn_name = "execute_chunk"`.
 - The `[summary]` record reports `output_root_status = fixture_output_root`,
   `tracked_tx_count = 5`, `execution_tx_count = 10`, and `tile_count = 10`.
 - Two back-to-back runs produce identical `next_output_root` values.
 - Raster trace `output_data` bytes match across repeated runs.
-- The canonical chunk plan contains 10 deterministic one-tx tiles and the final
-  tile reports `seals_block = true`.

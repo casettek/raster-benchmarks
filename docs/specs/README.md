@@ -9,38 +9,37 @@ This directory contains canonical behavioral and operational specs for `raster-b
 - Core Raster protocol/library contracts remain owned by the `raster` repo; this repo references pinned Raster revisions when running benchmarks.
 - Infra-heavy local scenario execution belongs here; small deterministic library/unit testing remains in `raster`.
 
-## Spec map (current)
+## Spec map
 
-- `docs/specs/README.md` (this file): spec index, ownership boundaries, and baseline operational contracts for the MVP foundation phase.
-- `docs/specs/program-bundle.md` (planned, Phase 1): bundle contract, identity fields, reproducibility rules.
-- `docs/specs/run-schema.md` (implemented): canonical JSON schema for `runs/*.json` run output files — data contract between runner and UI.
-- `docs/specs/l2-kona-workload.md` (implemented, L2 POC plan 007-008.6 + 008.7 phases 1-2): canonical synthetic fixture contract plus the native L2 workload shape (`l2-kona-poc`) with one strict single-block public trace today, a deterministic chunk-plan sidecar, an internal resumable chunk driver for strict replay parity, 5 tracked txs + supplemental block txs, deterministic local regeneration, and witness-closure manifest validation.
-- `docs/specs/local-e2e-scenarios.md` (implemented, L2 POC plan 007-008.6 + 008.7 phases 1-2): canonical synthetic 5-transaction benchmark package, explicit replay chunk boundaries for the same 10 execution txs, resumable strict chunk replay expectations, and honest/dishonest assertion contract.
-- `docs/specs/metrics-schema.md` (planned, Phase 3): result/artifact schema and baseline comparison contract.
-- `docs/specs/smart-contracts.md` (implemented): benchmark-local contract ownership, Foundry layout, and MVP claimer/challenger interaction surface.
+- `docs/specs/README.md` (this file): spec index and ownership boundaries.
+- `docs/specs/run-schema.md`: canonical JSON schema for `runs/*.json` run output files — data contract between runner and UI.
+- `docs/specs/l2-kona-workload.md`: the L2 Kona POC workload — Raster program shape (`#[sequence]` + `#[tile]`), execution boundary, chunk plan, trace format, fixture contract, witness closure manifest, and acceptance gate.
+- `docs/specs/local-e2e-scenarios.md`: canonical 5-transaction benchmark fixture, Raster program shape, replay chunk plan, and honest/dishonest scenario assertions.
+- `docs/specs/smart-contracts.md`: benchmark-local contract ownership, Foundry layout, and MVP claimer/challenger interaction surface.
 
-## Phase 0 operational contracts
+## Repository structure
+
+- `apps/` — runnable benchmark app entrypoints (claimer/challenger) that interact with local contracts.
+- `apps/workloads/` — Raster-backed benchmark workloads executed by the runner.
+  - `l2-kona-poc/` — L2 POC workload: one Raster program (`l2_block_execution` sequence calling `execute_chunk` tile 10 times) backed by a Kona EVM chunk driver.
+  - `raster-hello/` — minimal Raster workload for integration testing.
+- `contracts/` — benchmark-local smart contracts plus Foundry build/test/deploy scaffolding.
+- `crates/` — shared Rust libraries (workload adapter, runner integration).
+- `docs/` — canonical specs and setup contracts.
+- `fixtures/` — witness data and seed metadata for deterministic fixture regeneration.
+- `runs/` — run output landing area and canonical fixture files.
+- `scripts/` — generation and validation scripts (fixture, chunk plan, strict check).
+- `web/` — zero-dependency static HTML tools (open directly in a browser, no build step required).
+
+## Operational contracts
 
 ### Local execution baseline
 
 - Local EVM dependency: `anvil` is the default chain runtime for benchmark scenarios.
-- All phase-0 flows are local-only and must be reproducible without remote services.
+- All flows are local-only and must be reproducible without remote services.
 - Required local setup is defined in `docs/local-setup.md`.
 
-### Repository structure contract
-
-Current active top-level directories in this lean baseline:
-
-- `apps/`: runnable benchmark app entrypoints (claimer/challenger) that interact with local contracts.
-- `apps/workloads/`: Raster-backed benchmark workloads executed by the runner.
-- `contracts/`: benchmark-local smart contracts plus Foundry build/test/deploy scaffolding.
-- `docs/`: canonical specs and setup contracts.
-- `runs/`: local run-output landing area.
-- `web/`: zero-dependency static HTML tools (open directly in a browser, no build step required).
-
-`runs/artifacts/<run-id>/` is reserved for persisted Raster trace artifacts produced during real workload execution.
-
-### Run metadata schema (phase-0 baseline)
+### Run metadata schema
 
 Each benchmark run MUST emit metadata that includes exact Raster pin information:
 
