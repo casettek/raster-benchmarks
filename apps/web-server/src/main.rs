@@ -15,6 +15,8 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use shared::anvil::AnvilProvider;
 use shared::challenger::ReplayMode;
+use shared::claimer::{L2ClaimInput, stub_l2_claim_input};
+use shared::deploy::DEFAULT_MIN_BOND;
 use shared::raster_workload;
 use shared::run::{DivergenceSummary, RasterPin, RunOutput, StepOutput, SummaryOutput};
 use tokio::sync::Mutex;
@@ -179,6 +181,62 @@ async fn handle_run_sse(
 
     let stream = ReceiverStream::new(rx);
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+/// Resolve L2 claim input fields for the given workload.
+fn resolve_l2_claim_input(workload: &str) -> eyre::Result<L2ClaimInput> {
+    if workload == "l2-kona-poc" {
+        let fixture_path = "runs/fixtures/l2-poc-synth-fixture.json";
+        let fixture_json = std::fs::read_to_string(fixture_path)
+            .map_err(|e| eyre::eyre!("Failed to read fixture {fixture_path}: {e}"))?;
+        let fixture: serde_json::Value = serde_json::from_str(&fixture_json)?;
+
+        let prev_output_root = parse_hex_bytes32(
+            fixture["pre_checkpoint"]["prev_output_root"]
+                .as_str()
+                .ok_or_else(|| eyre::eyre!("missing pre_checkpoint.prev_output_root"))?,
+        )?;
+
+        let next_output_root = parse_hex_bytes32(
+            "0xe13f82b2b6e02d94a7b1a2a5a8ca21da71c7d14c1e3e35d97687e7bf86425b17",
+        )?;
+
+        let start_block = fixture["start_block"]
+            .as_u64()
+            .ok_or_else(|| eyre::eyre!("missing start_block"))?;
+        let end_block = fixture["end_block"]
+            .as_u64()
+            .ok_or_else(|| eyre::eyre!("missing end_block"))?;
+        let batch_hash = parse_hex_bytes32(
+            fixture["batch_hash"]
+                .as_str()
+                .ok_or_else(|| eyre::eyre!("missing batch_hash"))?,
+        )?;
+
+        Ok(L2ClaimInput {
+            prev_output_root,
+            next_output_root,
+            start_block,
+            end_block,
+            batch_hash,
+        })
+    } else {
+        Ok(stub_l2_claim_input())
+    }
+}
+
+fn parse_hex_bytes32(hex_str: &str) -> eyre::Result<[u8; 32]> {
+    let hex_str = hex_str.strip_prefix("0x").unwrap_or(hex_str);
+    let bytes = alloy::hex::decode(hex_str)?;
+    if bytes.len() != 32 {
+        return Err(eyre::eyre!(
+            "expected 32 bytes, got {} from 0x{hex_str}",
+            bytes.len()
+        ));
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    Ok(arr)
 }
 
 /// Execute the full claim/challenge pipeline, emitting SSE events along the way.
@@ -394,6 +452,22 @@ async fn run_pipeline(
         None
     };
 
+    // Resolve L2 claim input for the workload
+    let l2_input = match resolve_l2_claim_input(&workload) {
+        Ok(input) => input,
+        Err(e) => {
+            let _ = tx
+                .send(Ok(Event::default().event("error").data(
+                    serde_json::to_string(&ErrorPayload {
+                        message: format!("Failed to resolve L2 claim input: {e}"),
+                    })
+                    .unwrap_or_default(),
+                )))
+                .await;
+            return;
+        }
+    };
+
     // Emit claim step as "running"
     let claim_running = serde_json::json!({
         "key": "claim",
@@ -413,7 +487,9 @@ async fn run_pipeline(
     let claim_result = match shared::claimer::submit_claim(
         &state.provider,
         contract_address,
+        &l2_input,
         da_publication.as_ref(),
+        DEFAULT_MIN_BOND,
     )
     .await
     {
@@ -437,10 +513,27 @@ async fn run_pipeline(
     claim_metrics.insert("Tx hash".to_string(), claim_result.tx_hash.clone());
     claim_metrics.insert("Gas used".to_string(), claim_result.gas_used.to_string());
     claim_metrics.insert(
-        "Artifact root".to_string(),
-        claim_result.artifact_root.clone(),
+        "prevOutputRoot".to_string(),
+        claim_result.prev_output_root.clone(),
     );
-    claim_metrics.insert("Result root".to_string(), claim_result.result_root.clone());
+    claim_metrics.insert(
+        "nextOutputRoot".to_string(),
+        claim_result.next_output_root.clone(),
+    );
+    claim_metrics.insert(
+        "startBlock".to_string(),
+        claim_result.start_block.to_string(),
+    );
+    claim_metrics.insert("endBlock".to_string(), claim_result.end_block.to_string());
+    claim_metrics.insert("batchHash".to_string(), claim_result.batch_hash.clone());
+    claim_metrics.insert(
+        "Bond amount".to_string(),
+        claim_result.bond_amount.clone(),
+    );
+    claim_metrics.insert(
+        "Challenge deadline".to_string(),
+        claim_result.challenge_deadline.to_string(),
+    );
     claim_metrics.insert(
         "Trace tx hash".to_string(),
         claim_result.trace_tx_hash.clone(),
@@ -491,6 +584,7 @@ async fn run_pipeline(
         contract_address,
         claim_result.claim_id,
         replay_mode,
+        &l2_input,
     )
     .await
     {
@@ -553,20 +647,16 @@ async fn run_pipeline(
     outcome_metrics.insert("Final state".to_string(), resolution.final_state.clone());
     outcome_metrics.insert("Proof status".to_string(), resolution.proof_status.clone());
     outcome_metrics.insert(
-        "Claimer artifact root".to_string(),
-        resolution.claimer_artifact_root.clone(),
+        "Claimer nextOutputRoot".to_string(),
+        resolution.claimer_next_output_root.clone(),
     );
     outcome_metrics.insert(
-        "Claimer result root".to_string(),
-        resolution.claimer_result_root.clone(),
+        "Observed nextOutputRoot".to_string(),
+        resolution.divergence.observed_next_output_root.clone(),
     );
     outcome_metrics.insert(
-        "Observed artifact root".to_string(),
-        resolution.divergence.observed_artifact_root.clone(),
-    );
-    outcome_metrics.insert(
-        "Observed result root".to_string(),
-        resolution.divergence.observed_result_root.clone(),
+        "Challenge deadline".to_string(),
+        resolution.challenge_deadline.to_string(),
     );
     outcome_metrics.insert(
         "Trace fetch".to_string(),

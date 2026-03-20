@@ -111,14 +111,21 @@ fixture, not an additional user-facing runtime input field in this phase.
 - Uses strict canonical execution mode (no fallback statuses permitted).
 - Produces deterministic `nextOutputRoot` for block `26207960`.
 - Emits a `[summary]` record with `output_root_status = fixture_output_root`.
-- Submits claim metadata bound to
+- Submits L2 settlement claim with claimer bond, binding:
   `prevOutputRoot`, `nextOutputRoot`, `startBlock`, `endBlock`, `batchHash`.
+- Contract records `challengeDeadline = createdAt + challengePeriod`.
+- After challenge deadline, claim settles and bond is returned to claimer.
+- Canonical deterministic `nextOutputRoot` for the synthetic fixture:
+  `0xe13f82b2b6e02d94a7b1a2a5a8ca21da71c7d14c1e3e35d97687e7bf86425b17`
 
 ### Dishonest scenario
 
 - Uses same canonical fixture input bytes and block target.
-- Claim contains an intentionally incorrect `nextOutputRoot`.
-- Replay/audit flow must classify divergence deterministically and reject/slash.
+- Replay/audit flow computes a deliberately wrong `nextOutputRoot` (byte-flipped).
+- Challenger calls `challengeClaim` with the divergent root before the deadline.
+- Contract transitions to `Slashed`, bond transferred to challenger.
+- Replay/audit flow classifies divergence deterministically and emits structured
+  divergence report.
 
 ## Fixture completeness rule
 

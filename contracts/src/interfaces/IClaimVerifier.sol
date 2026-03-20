@@ -11,13 +11,18 @@ interface IClaimVerifier {
 
     struct Claim {
         address claimer;
-        bytes32 workloadId;
-        bytes32 artifactRoot;
-        bytes32 resultRoot;
+        bytes32 prevOutputRoot;
+        bytes32 nextOutputRoot;
+        uint64 startBlock;
+        uint64 endBlock;
+        bytes32 batchHash;
+        bytes32 inputBlobVersionedHash;
         bytes32 traceTxHash;
         uint32 tracePayloadBytes;
         uint8 traceCodecId;
+        uint256 bondAmount;
         uint64 createdAt;
+        uint64 challengeDeadline;
         ClaimState state;
     }
 
@@ -31,19 +36,20 @@ interface IClaimVerifier {
     event ClaimSubmitted(
         uint256 indexed claimId,
         address indexed claimer,
-        bytes32 indexed workloadId,
-        bytes32 artifactRoot,
-        bytes32 resultRoot,
-        bytes32 traceTxHash,
-        uint32 tracePayloadBytes,
-        uint8 traceCodecId
+        bytes32 prevOutputRoot,
+        bytes32 nextOutputRoot,
+        uint64 startBlock,
+        uint64 endBlock,
+        bytes32 batchHash,
+        bytes32 inputBlobVersionedHash,
+        uint256 bondAmount,
+        uint64 challengeDeadline
     );
 
     event ClaimChallenged(
         uint256 indexed claimId,
         address indexed challenger,
-        bytes32 observedArtifactRoot,
-        bytes32 observedResultRoot
+        bytes32 observedNextOutputRoot
     );
 
     event ClaimSettled(uint256 indexed claimId);
@@ -56,21 +62,26 @@ interface IClaimVerifier {
     ) external returns (bytes32 payloadHash, uint32 payloadBytes);
 
     function submitClaim(
-        bytes32 workloadId,
-        bytes32 artifactRoot,
-        bytes32 resultRoot,
+        bytes32 prevOutputRoot,
+        bytes32 nextOutputRoot,
+        uint64 startBlock,
+        uint64 endBlock,
+        bytes32 batchHash,
         bytes32 traceTxHash,
         uint32 tracePayloadBytes,
         uint8 traceCodecId
-    ) external returns (uint256 claimId);
+    ) external payable returns (uint256 claimId);
 
     function challengeClaim(
         uint256 claimId,
-        bytes32 observedArtifactRoot,
-        bytes32 observedResultRoot
+        bytes32 observedNextOutputRoot
     ) external;
 
     function settleClaim(uint256 claimId) external;
 
     function getClaim(uint256 claimId) external view returns (Claim memory);
+
+    function challengePeriod() external view returns (uint64);
+
+    function minBond() external view returns (uint256);
 }

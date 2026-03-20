@@ -1,16 +1,13 @@
 use std::time::Instant;
 
 use alloy::primitives::{Address, B256, FixedBytes, U256};
+use alloy::providers::Provider;
 use eyre::{Result, WrapErr};
 use serde::Serialize;
 
 use crate::anvil::AnvilProvider;
-use crate::claimer::{ARTIFACT_ROOT, RESULT_ROOT, WORKLOAD_ID};
+use crate::claimer::L2ClaimInput;
 use crate::contract::IClaimVerifier;
-
-/// Hardcoded dishonest observed roots (distinct from claimer's `0xaa`/`0xbb`).
-pub const OBSERVED_ARTIFACT_ROOT: [u8; 32] = [0xcc; 32];
-pub const OBSERVED_RESULT_ROOT: [u8; 32] = [0xdd; 32];
 
 #[derive(Debug, Clone, Copy)]
 pub enum ReplayMode {
@@ -36,10 +33,8 @@ pub struct ChallengeResult {
     pub gas_used: u64,
     pub block_number: u64,
     pub final_state: String,
-    pub claimer_artifact_root: String,
-    pub claimer_result_root: String,
-    pub observed_artifact_root: String,
-    pub observed_result_root: String,
+    pub claimer_next_output_root: String,
+    pub observed_next_output_root: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -50,8 +45,7 @@ pub struct DivergenceReport {
     pub trace_fetch_status: String,
     pub trace_tx_hash: Option<String>,
     pub trace_payload_bytes: Option<u32>,
-    pub observed_artifact_root: String,
-    pub observed_result_root: String,
+    pub observed_next_output_root: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -63,13 +57,14 @@ pub struct AuditResolution {
     pub tx_hash: String,
     pub gas_used: u64,
     pub claim_id: U256,
-    pub claimer_artifact_root: String,
-    pub claimer_result_root: String,
+    pub claimer_next_output_root: String,
+    pub challenge_deadline: u64,
 }
 
-/// Settle a pending claim (honest path).
+/// Settle a pending claim after the challenge deadline has passed (honest path).
 ///
-/// Calls `settleClaim(claimId)` and decodes the `ClaimSettled` event.
+/// On local Anvil, the caller must advance the chain timestamp past the
+/// challenge deadline before calling this.
 pub async fn settle_claim(
     provider: &AnvilProvider,
     contract_address: Address,
@@ -111,23 +106,20 @@ pub async fn settle_claim(
     })
 }
 
-/// Challenge a pending claim with divergent roots.
+/// Challenge a pending claim with a divergent nextOutputRoot.
 pub async fn challenge_claim_with_observed(
     provider: &AnvilProvider,
     contract_address: Address,
     claim_id: U256,
-    observed_artifact: FixedBytes<32>,
-    observed_result: FixedBytes<32>,
+    observed_next_output_root: FixedBytes<32>,
 ) -> Result<ChallengeResult> {
     let contract = IClaimVerifier::new(contract_address, provider);
 
-    // Read the original claim to capture claimer roots
     let claim = contract.getClaim(claim_id).call().await?;
-    let claimer_artifact_root = format!("0x{}", alloy::hex::encode(claim.artifactRoot));
-    let claimer_result_root = format!("0x{}", alloy::hex::encode(claim.resultRoot));
+    let claimer_next_output_root = format!("0x{}", alloy::hex::encode(claim.nextOutputRoot));
 
     let pending = contract
-        .challengeClaim(claim_id, observed_artifact, observed_result)
+        .challengeClaim(claim_id, observed_next_output_root)
         .send()
         .await?;
     let receipt = pending.get_receipt().await?;
@@ -162,36 +154,50 @@ pub async fn challenge_claim_with_observed(
         gas_used: receipt.gas_used,
         block_number: receipt.block_number.unwrap(),
         final_state: "Slashed".to_string(),
-        claimer_artifact_root,
-        claimer_result_root,
-        observed_artifact_root: format!("0x{}", alloy::hex::encode(observed_artifact)),
-        observed_result_root: format!("0x{}", alloy::hex::encode(observed_result)),
+        claimer_next_output_root,
+        observed_next_output_root: format!("0x{}", alloy::hex::encode(observed_next_output_root)),
     })
 }
 
-/// Challenge with the legacy hardcoded dishonest roots.
-pub async fn challenge_claim(
-    provider: &AnvilProvider,
-    contract_address: Address,
-    claim_id: U256,
-) -> Result<ChallengeResult> {
-    let observed_artifact = FixedBytes::from(OBSERVED_ARTIFACT_ROOT);
-    let observed_result = FixedBytes::from(OBSERVED_RESULT_ROOT);
-    challenge_claim_with_observed(
-        provider,
-        contract_address,
-        claim_id,
-        observed_artifact,
-        observed_result,
-    )
-    .await
+/// Advance the Anvil chain timestamp to just past the given deadline.
+///
+/// Uses Anvil-specific RPC methods `evm_setNextBlockTimestamp` and `evm_mine`.
+pub async fn advance_past_deadline(provider: &AnvilProvider, deadline: u64) -> Result<()> {
+    // Set the next block timestamp to deadline + 1
+    let target_timestamp = deadline + 1;
+    provider
+        .raw_request::<_, ()>(
+            "evm_setNextBlockTimestamp".into(),
+            [serde_json::Value::String(format!(
+                "0x{:x}",
+                target_timestamp
+            ))],
+        )
+        .await
+        .wrap_err("failed to set next block timestamp")?;
+
+    // Mine a block to apply the timestamp
+    provider
+        .raw_request::<_, ()>("evm_mine".into(), ())
+        .await
+        .wrap_err("failed to mine block")?;
+
+    Ok(())
 }
 
+/// Resolve a claim via local replay and either settle or challenge.
+///
+/// In honest mode, the expected `nextOutputRoot` matches the claimer's; in
+/// dishonest simulation mode, a deliberately wrong root triggers challenge.
+///
+/// For the honest path, the chain is advanced past the challenge deadline
+/// before calling `settleClaim`.
 pub async fn resolve_claim_with_replay(
     provider: &AnvilProvider,
     contract_address: Address,
     claim_id: U256,
     mode: ReplayMode,
+    l2_input: &L2ClaimInput,
 ) -> Result<AuditResolution> {
     let contract = IClaimVerifier::new(contract_address, provider);
     let claim = contract
@@ -201,24 +207,23 @@ pub async fn resolve_claim_with_replay(
         .wrap_err("failed to fetch claim before replay")?;
 
     let replay_start = Instant::now();
-    let (observed_artifact, observed_result) = replay_roots_for_mode(mode, claim.workloadId)?;
+    let observed_next_output_root = replay_next_output_root(mode, l2_input)?;
     let replay_time_ms = replay_start.elapsed().as_millis().min(u64::MAX as u128) as u64;
 
-    let mismatch = claim.artifactRoot != observed_artifact || claim.resultRoot != observed_result;
+    let mismatch = claim.nextOutputRoot != observed_next_output_root;
 
     let mut divergence = DivergenceReport {
         detected: mismatch,
         reason: if mismatch {
-            "Local replay output differs from claimed result".to_string()
+            "Local replay nextOutputRoot differs from claimed nextOutputRoot".to_string()
         } else {
-            "Local replay matched claimed result".to_string()
+            "Local replay matched claimed nextOutputRoot".to_string()
         },
         first_divergence_index: None,
         trace_fetch_status: "skipped".to_string(),
         trace_tx_hash: None,
         trace_payload_bytes: None,
-        observed_artifact_root: format!("0x{}", alloy::hex::encode(observed_artifact)),
-        observed_result_root: format!("0x{}", alloy::hex::encode(observed_result)),
+        observed_next_output_root: format!("0x{}", alloy::hex::encode(observed_next_output_root)),
     };
 
     if mismatch {
@@ -251,8 +256,7 @@ pub async fn resolve_claim_with_replay(
             provider,
             contract_address,
             claim_id,
-            observed_artifact,
-            observed_result,
+            observed_next_output_root,
         )
         .await?;
 
@@ -264,10 +268,13 @@ pub async fn resolve_claim_with_replay(
             tx_hash: challenge.tx_hash,
             gas_used: challenge.gas_used,
             claim_id,
-            claimer_artifact_root: challenge.claimer_artifact_root,
-            claimer_result_root: challenge.claimer_result_root,
+            claimer_next_output_root: challenge.claimer_next_output_root,
+            challenge_deadline: claim.challengeDeadline,
         })
     } else {
+        // Advance chain time past the challenge deadline before settling
+        advance_past_deadline(provider, claim.challengeDeadline).await?;
+
         let settled = settle_claim(provider, contract_address, claim_id).await?;
         Ok(AuditResolution {
             replay_time_ms,
@@ -277,32 +284,31 @@ pub async fn resolve_claim_with_replay(
             tx_hash: settled.tx_hash,
             gas_used: settled.gas_used,
             claim_id,
-            claimer_artifact_root: format!("0x{}", alloy::hex::encode(claim.artifactRoot)),
-            claimer_result_root: format!("0x{}", alloy::hex::encode(claim.resultRoot)),
+            claimer_next_output_root: format!(
+                "0x{}",
+                alloy::hex::encode(claim.nextOutputRoot)
+            ),
+            challenge_deadline: claim.challengeDeadline,
         })
     }
 }
 
-fn replay_roots_for_mode(
+/// Produce the expected `nextOutputRoot` for a given replay mode.
+///
+/// In honest mode, returns the same `nextOutputRoot` from the L2 claim input
+/// (matching the claimer). In dishonest simulation, returns a deliberately
+/// different value to trigger challenge divergence.
+fn replay_next_output_root(
     mode: ReplayMode,
-    workload_id: FixedBytes<32>,
-) -> Result<(FixedBytes<32>, FixedBytes<32>)> {
-    let expected_workload = FixedBytes::from(WORKLOAD_ID);
-    if workload_id != expected_workload {
-        return Err(eyre::eyre!(
-            "unsupported workload id for replay: 0x{}",
-            alloy::hex::encode(workload_id)
-        ));
-    }
-
+    l2_input: &L2ClaimInput,
+) -> Result<FixedBytes<32>> {
     Ok(match mode {
-        ReplayMode::Honest => (
-            FixedBytes::from(ARTIFACT_ROOT),
-            FixedBytes::from(RESULT_ROOT),
-        ),
-        ReplayMode::DishonestSimulation => (
-            FixedBytes::from(OBSERVED_ARTIFACT_ROOT),
-            FixedBytes::from(OBSERVED_RESULT_ROOT),
-        ),
+        ReplayMode::Honest => FixedBytes::from(l2_input.next_output_root),
+        ReplayMode::DishonestSimulation => {
+            // Produce a deterministic but wrong root by flipping a byte
+            let mut wrong = l2_input.next_output_root;
+            wrong[0] ^= 0xff;
+            FixedBytes::from(wrong)
+        }
     })
 }

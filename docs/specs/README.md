@@ -15,7 +15,7 @@ This directory contains canonical behavioral and operational specs for `raster-b
 - `docs/specs/run-schema.md`: canonical JSON schema for `runs/*.json` run output files — data contract between runner and UI.
 - `docs/specs/l2-kona-workload.md`: the L2 Kona POC workload — Raster program shape (`#[sequence]` + `#[tile]`), execution boundary, chunk plan, trace format, fixture contract, witness closure manifest, and acceptance gate.
 - `docs/specs/local-e2e-scenarios.md`: canonical 5-transaction benchmark fixture, Raster program shape, replay chunk plan, and honest/dishonest scenario assertions.
-- `docs/specs/smart-contracts.md`: benchmark-local contract ownership, Foundry layout, and MVP claimer/challenger interaction surface.
+- `docs/specs/smart-contracts.md`: L2 settlement contract — claim object (outputRoot transition, bond, challenge deadline), state machine, constructor config, DA pointer fields, and blob versioned hash capture.
 
 ## Repository structure
 

@@ -2,77 +2,102 @@ use alloy::sol;
 
 sol! {
     #[sol(rpc)]
-    interface IClaimVerifier {
-        enum ClaimState {
-            None,
-            Pending,
-            Settled,
-            Slashed,
-        }
-
-        struct Claim {
-            address claimer;
-            bytes32 workloadId;
-            bytes32 artifactRoot;
-            bytes32 resultRoot;
-            bytes32 traceTxHash;
-            uint32 tracePayloadBytes;
-            uint8 traceCodecId;
-            uint64 createdAt;
-            ClaimState state;
-        }
-
-        event TracePublished(
-            address indexed publisher,
-            bytes32 indexed payloadHash,
-            uint32 payloadBytes,
-            uint8 codecId
-        );
-
-        event ClaimSubmitted(
-            uint256 indexed claimId,
-            address indexed claimer,
-            bytes32 indexed workloadId,
-            bytes32 artifactRoot,
-            bytes32 resultRoot,
-            bytes32 traceTxHash,
-            uint32 tracePayloadBytes,
-            uint8 traceCodecId
-        );
-
-        event ClaimChallenged(
-            uint256 indexed claimId,
-            address indexed challenger,
-            bytes32 observedArtifactRoot,
-            bytes32 observedResultRoot
-        );
-
-        event ClaimSettled(uint256 indexed claimId);
-
-        event ClaimSlashed(uint256 indexed claimId);
-
-        function publishTrace(
-            bytes calldata payload,
-            uint8 codecId
-        ) external returns (bytes32 payloadHash, uint32 payloadBytes);
-
-        function submitClaim(
-            bytes32 workloadId,
-            bytes32 artifactRoot,
-            bytes32 resultRoot,
-            bytes32 traceTxHash,
-            uint32 tracePayloadBytes,
-            uint8 traceCodecId
-        ) external returns (uint256 claimId);
-
-        function challengeClaim(
-            uint256 claimId,
-            bytes32 observedArtifactRoot,
-            bytes32 observedResultRoot
-        ) external;
-
-        function settleClaim(uint256 claimId) external;
-
-        function getClaim(uint256 claimId) external view returns (Claim memory);
+    contract ClaimVerifier {
+        constructor(uint64 _challengePeriod, uint256 _minBond);
     }
 }
+
+#[allow(clippy::too_many_arguments)]
+mod claim_verifier_interface {
+    use alloy::sol;
+
+    sol! {
+        #[sol(rpc)]
+        interface IClaimVerifier {
+            enum ClaimState {
+                None,
+                Pending,
+                Settled,
+                Slashed,
+            }
+
+            struct Claim {
+                address claimer;
+                bytes32 prevOutputRoot;
+                bytes32 nextOutputRoot;
+                uint64 startBlock;
+                uint64 endBlock;
+                bytes32 batchHash;
+                bytes32 inputBlobVersionedHash;
+                bytes32 traceTxHash;
+                uint32 tracePayloadBytes;
+                uint8 traceCodecId;
+                uint256 bondAmount;
+                uint64 createdAt;
+                uint64 challengeDeadline;
+                ClaimState state;
+            }
+
+            event TracePublished(
+                address indexed publisher,
+                bytes32 indexed payloadHash,
+                uint32 payloadBytes,
+                uint8 codecId
+            );
+
+            event ClaimSubmitted(
+                uint256 indexed claimId,
+                address indexed claimer,
+                bytes32 prevOutputRoot,
+                bytes32 nextOutputRoot,
+                uint64 startBlock,
+                uint64 endBlock,
+                bytes32 batchHash,
+                bytes32 inputBlobVersionedHash,
+                uint256 bondAmount,
+                uint64 challengeDeadline
+            );
+
+            event ClaimChallenged(
+                uint256 indexed claimId,
+                address indexed challenger,
+                bytes32 observedNextOutputRoot
+            );
+
+            event ClaimSettled(uint256 indexed claimId);
+
+            event ClaimSlashed(uint256 indexed claimId);
+
+            function publishTrace(
+                bytes calldata payload,
+                uint8 codecId
+            ) external returns (bytes32 payloadHash, uint32 payloadBytes);
+
+            function submitClaim(
+                bytes32 prevOutputRoot,
+                bytes32 nextOutputRoot,
+                uint64 startBlock,
+                uint64 endBlock,
+                bytes32 batchHash,
+                bytes32 traceTxHash,
+                uint32 tracePayloadBytes,
+                uint8 traceCodecId
+            ) external payable returns (uint256 claimId);
+
+            function challengeClaim(
+                uint256 claimId,
+                bytes32 observedNextOutputRoot
+            ) external;
+
+            function settleClaim(uint256 claimId) external;
+
+            function getClaim(uint256 claimId) external view returns (Claim memory);
+
+            function challengePeriod() external view returns (uint64);
+
+            function minBond() external view returns (uint256);
+        }
+    }
+}
+
+pub use claim_verifier_interface::IClaimVerifier;

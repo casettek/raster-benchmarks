@@ -2,6 +2,8 @@ use std::env;
 use std::path::PathBuf;
 
 use eyre::Result;
+use shared::claimer::stub_l2_claim_input;
+use shared::deploy::DEFAULT_MIN_BOND;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -27,8 +29,16 @@ async fn main() -> Result<()> {
     let contract_address = shared::deploy::deploy_claim_verifier(&provider, &forge_out).await?;
     eprintln!("ClaimVerifier deployed at {contract_address}");
 
-    // Submit claim via shared library
-    let result = shared::claimer::submit_claim(&provider, contract_address, None).await?;
+    // Submit claim via shared library with stub L2 fields
+    let l2_input = stub_l2_claim_input();
+    let result = shared::claimer::submit_claim(
+        &provider,
+        contract_address,
+        &l2_input,
+        None,
+        DEFAULT_MIN_BOND,
+    )
+    .await?;
     println!("{}", serde_json::to_string_pretty(&result)?);
 
     Ok(())
