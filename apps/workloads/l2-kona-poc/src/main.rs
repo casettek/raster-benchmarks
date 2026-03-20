@@ -35,12 +35,6 @@ const CANONICAL_RUNTIME_TILE_COUNT: usize = 10;
 
 #[derive(Debug, thiserror::Error)]
 enum WorkloadError {
-    #[error("missing --input '<fixture-json>'")]
-    MissingInput,
-    #[error("invalid --execution-mode '{value}' (expected 'strict' or 'fallback')")]
-    InvalidExecutionMode { value: String },
-    #[error("invalid --chunk-size '{value}' (expected a positive integer)")]
-    InvalidChunkSizeValue { value: String },
     #[error("fixture parse failed: {0}")]
     FixtureParse(#[from] serde_json::Error),
     #[error("invalid fixture: {0}")]
@@ -209,26 +203,9 @@ enum ExecutionMode {
 }
 
 impl ExecutionMode {
-    fn from_cli(value: Option<String>) -> Result<Self> {
-        match value.as_deref() {
-            None | Some("strict") => Ok(Self::Strict),
-            Some("fallback") => Ok(Self::Fallback),
-            Some(other) => Err(WorkloadError::InvalidExecutionMode {
-                value: other.to_string(),
-            }),
-        }
-    }
-
     fn allow_fallback(self) -> bool {
         matches!(self, Self::Fallback)
     }
-}
-
-struct CliArgs {
-    input_json: String,
-    execution_mode: ExecutionMode,
-    emit_chunk_plan: bool,
-    chunk_size: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -256,68 +233,21 @@ struct ReferenceExecutionOutcome {
 }
 
 // ---------------------------------------------------------------------------
-// Entry point
+// Raster program
 // ---------------------------------------------------------------------------
 
-fn main() {
-    if let Err(error) = run() {
-        eprintln!("{error}");
-        std::process::exit(1);
-    }
-}
-
-fn run() -> Result<()> {
-    let args = parse_args()?;
-    let fixture: FixtureInput = serde_json::from_str(&args.input_json)?;
-    validate_fixture(&fixture)?;
-
-    // --emit-chunk-plan is a utility mode, not a Raster program execution.
-    if args.emit_chunk_plan {
-        let plan = build_chunk_plan(&fixture, args.chunk_size)?;
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&plan).map_err(WorkloadError::FixtureParse)?
-        );
-        return Ok(());
-    }
-
-    // Fallback mode preserves the legacy whole-block path without Raster tracing.
-    if args.execution_mode.allow_fallback() {
-        eprintln!(
-            "warning: running fixture '{}' with fallback mode enabled; strict completeness guarantees are disabled",
-            fixture.fixture_id
-        );
-        let trace = execute_fallback_block(&fixture, args.execution_mode)?;
-        println!("[trace]{}", trace);
-        return Ok(());
-    }
-
-    // Strict mode: run the real Raster program with tile-level tracing.
-    ensure_canonical_runtime_shape(&fixture, args.chunk_size)?;
-
-    raster::init();
-    let result = l2_block_execution(fixture);
-    raster::finish();
-
-    // The final tile must be the sealing tile with all finalization fields set.
-    assert!(result.seals_block, "final tile must seal the block");
-
-    // Emit a machine-readable summary line for the check script and runner.
-    // This is NOT a trace record — it's a final program output summary.
-    let summary = serde_json::json!({
-        "next_output_root": result.next_output_root.as_deref().expect("sealing tile must set next_output_root"),
-        "output_root_status": result.output_root_status.as_deref().expect("sealing tile must set output_root_status"),
-        "state_root": result.state_root.as_deref().expect("sealing tile must set state_root"),
-        "gas_used": result.gas_used.expect("sealing tile must set gas_used"),
-        "block_hash": result.block_hash,
-        "tile_count": CANONICAL_RUNTIME_TILE_COUNT,
-        "tracked_tx_count": 5,
-        "supplemental_tx_count": 5,
-        "execution_tx_count": 10,
-    });
-    println!("[summary]{}", summary);
-
-    Ok(())
+#[sequence]
+fn main(fixture: FixtureInput) {
+    raster::call!(execute_chunk, fixture.clone(), 0usize);
+    raster::call!(execute_chunk, fixture.clone(), 1usize);
+    raster::call!(execute_chunk, fixture.clone(), 2usize);
+    raster::call!(execute_chunk, fixture.clone(), 3usize);
+    raster::call!(execute_chunk, fixture.clone(), 4usize);
+    raster::call!(execute_chunk, fixture.clone(), 5usize);
+    raster::call!(execute_chunk, fixture.clone(), 6usize);
+    raster::call!(execute_chunk, fixture.clone(), 7usize);
+    raster::call!(execute_chunk, fixture.clone(), 8usize);
+    raster::call!(execute_chunk, fixture, 9usize);
 }
 
 // ---------------------------------------------------------------------------
@@ -335,7 +265,7 @@ fn run() -> Result<()> {
 /// Shared execution state for the current block execution.
 ///
 /// In native execution mode, a single ChunkDriver persists across all tiles
-/// within one `l2_block_execution` sequence call. The TrieDB and cumulative
+/// within one sequence execution. The TrieDB and cumulative
 /// EVM state are carried forward in-process so later tiles can resume from
 /// where prior tiles left off without replaying from the parent checkpoint.
 ///
@@ -379,31 +309,6 @@ fn take_shared_execution() -> Option<SharedExecutionState> {
     EXECUTION_STATE.with(|cell| cell.borrow_mut().take())
 }
 
-/// Top-level sequence: execute one L2 block as 10 deterministic chunk tiles.
-///
-/// Each tile executes exactly one transaction from the canonical batch.
-/// Tiles 0–4 cover tracked txs; tiles 5–9 cover supplemental txs.
-/// Tile 9 seals the block and yields the final output root.
-///
-/// The same `execute_chunk` tile function is called for every tile — it's
-/// one ELF binary that handles any tile index. The tile index parameter
-/// selects which transaction slice to execute.
-#[sequence]
-fn l2_block_execution(fixture: FixtureInput) -> TileOutput {
-    // Initialize shared execution state for this block.
-    init_shared_execution(&fixture).expect("failed to initialize execution context");
-    let c0 = execute_chunk(fixture.clone(), 0usize);
-    let c1 = execute_chunk(fixture.clone(), c0.tile_index + 1);
-    let c2 = execute_chunk(fixture.clone(), c1.tile_index + 1);
-    let c3 = execute_chunk(fixture.clone(), c2.tile_index + 1);
-    let c4 = execute_chunk(fixture.clone(), c3.tile_index + 1);
-    let c5 = execute_chunk(fixture.clone(), c4.tile_index + 1);
-    let c6 = execute_chunk(fixture.clone(), c5.tile_index + 1);
-    let c7 = execute_chunk(fixture.clone(), c6.tile_index + 1);
-    let c8 = execute_chunk(fixture.clone(), c7.tile_index + 1);
-    execute_chunk(fixture, c8.tile_index + 1)
-}
-
 /// Execute one chunk tile by index.
 ///
 /// This is the single tile function for the entire L2 block execution program.
@@ -425,6 +330,13 @@ fn execute_chunk(fixture: FixtureInput, tile_index: usize) -> TileOutput {
 // ---------------------------------------------------------------------------
 
 fn execute_tile_shared(fixture: &FixtureInput, tile_index: usize) -> Result<TileOutput> {
+    // Lazily initialize shared execution state on the first tile call.
+    EXECUTION_STATE.with(|cell| {
+        if cell.borrow().is_none() {
+            init_shared_execution(fixture).expect("failed to initialize execution context");
+        }
+    });
+
     let chunk_plan = build_chunk_plan(fixture, DEFAULT_CHUNK_SIZE)?;
     let tile = chunk_plan.tile(tile_index).ok_or_else(|| {
         WorkloadError::InvalidChunkResume(format!("missing canonical tile {tile_index}"))
@@ -540,43 +452,6 @@ fn ensure_finalized_chunk_matches_reference(
     }
 
     Ok(())
-}
-
-fn execute_fallback_block(fixture: &FixtureInput, execution_mode: ExecutionMode) -> Result<Value> {
-    let batch_id = batch_id(fixture);
-    let context = load_execution_context(fixture)?;
-    let payload = build_payload(fixture, &context)?;
-    let reference = execute_reference_block(fixture, &context, payload, execution_mode, &batch_id)?;
-    Ok(build_legacy_trace_record(
-        fixture,
-        &context.parent_header,
-        &reference,
-    ))
-}
-
-fn build_legacy_trace_record(
-    fixture: &FixtureInput,
-    parent_header: &alloy_consensus::Sealed<Header>,
-    outcome: &ReferenceExecutionOutcome,
-) -> Value {
-    serde_json::json!({
-        "exec_index": 0,
-        "tile": "execute_l2_block",
-        "tx_ids": fixture.transactions.iter().map(|tx| tx.id.as_str()).collect::<Vec<_>>(),
-        "tx_hashes": fixture.transactions.iter().map(|tx| tx.hash.as_str()).collect::<Vec<_>>(),
-        "tracked_tx_count": fixture.transactions.len(),
-        "supplemental_tx_count": fixture.supplemental_transactions.len(),
-        "execution_tx_count": fixture.execution_transactions().len(),
-        "block_number": fixture.start_block,
-        "parent_block_number": parent_header.number,
-        "parent_header_hash": format!("{:#x}", parent_header.hash_slow()),
-        "prev_output_root": fixture.pre_checkpoint.prev_output_root,
-        "next_output_root": format!("{:#x}", outcome.next_output_root),
-        "output_root_status": outcome.output_root_status,
-        "batch_hash": fixture.batch_hash,
-        "block_hash": outcome.block_hash,
-        "gas_used": outcome.gas_used,
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -735,52 +610,6 @@ fn execute_reference_block(
 // ---------------------------------------------------------------------------
 // CLI argument parsing
 // ---------------------------------------------------------------------------
-
-fn parse_args() -> Result<CliArgs> {
-    let mut args = env::args().skip(1);
-    let mut input_json: Option<String> = None;
-    let mut execution_mode: Option<String> = None;
-    let mut emit_chunk_plan = false;
-    let mut chunk_size = DEFAULT_CHUNK_SIZE;
-
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--input" => {
-                input_json = Some(args.next().ok_or(WorkloadError::MissingInput)?);
-            }
-            "--execution-mode" => {
-                execution_mode = args.next();
-            }
-            "--emit-chunk-plan" => {
-                emit_chunk_plan = true;
-            }
-            "--chunk-size" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| WorkloadError::InvalidChunkSizeValue {
-                        value: "<missing>".to_string(),
-                    })?;
-                chunk_size = value
-                    .parse()
-                    .map_err(|_| WorkloadError::InvalidChunkSizeValue {
-                        value: value.clone(),
-                    })?;
-            }
-            _ => {}
-        }
-    }
-
-    if chunk_size == 0 {
-        return Err(WorkloadError::InvalidChunkSize);
-    }
-
-    Ok(CliArgs {
-        input_json: input_json.ok_or(WorkloadError::MissingInput)?,
-        execution_mode: ExecutionMode::from_cli(execution_mode)?,
-        emit_chunk_plan,
-        chunk_size,
-    })
-}
 
 // ---------------------------------------------------------------------------
 // Fixture validation
@@ -1227,13 +1056,22 @@ mod tests {
         serde_json::from_str(&raw).expect("failed to parse canonical fixture")
     }
 
+    /// Run all 10 tiles sequentially against a fixture (test helper, not a sequence).
+    fn run_all_tiles(fixture: FixtureInput) -> TileOutput {
+        let mut result = execute_chunk(fixture.clone(), 0);
+        for i in 1..CANONICAL_RUNTIME_TILE_COUNT {
+            result = execute_chunk(fixture.clone(), i);
+        }
+        result
+    }
+
     #[test]
     fn strict_canonical_fixture_executes_all_tiles() {
         let fixture = canonical_fixture();
         ensure_canonical_runtime_shape(&fixture, DEFAULT_CHUNK_SIZE)
             .expect("canonical runtime shape should be valid");
 
-        let result = l2_block_execution(fixture);
+        let result = run_all_tiles(fixture);
 
         assert_eq!(result.tile_index, 9);
         assert!(result.seals_block);
@@ -1249,8 +1087,8 @@ mod tests {
     fn strict_canonical_fixture_is_deterministic_across_repeated_runs() {
         let fixture = canonical_fixture();
 
-        let run_one = l2_block_execution(fixture.clone());
-        let run_two = l2_block_execution(fixture);
+        let run_one = run_all_tiles(fixture.clone());
+        let run_two = run_all_tiles(fixture);
 
         assert_eq!(run_one.next_output_root, run_two.next_output_root);
         assert_eq!(run_one.state_root, run_two.state_root);

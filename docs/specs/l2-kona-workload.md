@@ -145,49 +145,78 @@ construction.
 
 ```
 #[sequence]
-fn l2_block_execution(fixture) -> TileOutput
-    calls execute_chunk(fixture, 0)
-    calls execute_chunk(fixture, 1)
+fn main(fixture: FixtureInput)
+    call!(execute_chunk, fixture, 0)
+    call!(execute_chunk, fixture, 1)
     ...
-    calls execute_chunk(fixture, 9)
+    call!(execute_chunk, fixture, 9)
 
 #[tile(kind = iter)]
 fn execute_chunk(fixture, tile_index) -> TileOutput
 ```
 
-One sequence. One tile function. Ten invocations. The tile index parameter
-selects which transaction slice to execute. In a zkVM context, this compiles
-to one ELF binary parameterized by `tile_index`.
+One sequence, one tile function, ten invocations. The `main` sequence is the
+Raster program entry point. The sequence body contains only `call!` invocations.
+The tile index parameter selects which transaction slice to execute. In a zkVM
+context, this compiles to one ELF binary parameterized by `tile_index`.
 
 ### Trace output format
 
-Strict mode emits:
+The program emits 10 Raster-native `[trace]` records (one per tile invocation),
+each containing:
 
-- 10 Raster-native `[trace]` records (one per tile invocation), each containing:
-  - `fn_name` — always `execute_chunk`
-  - `input_data` — postcard-serialized tile inputs (fixture + tile_index)
-  - `output_data` — postcard-serialized `TileOutput`
-  - `inputs` — parameter metadata (name and type for each parameter)
-  - `output_type` — `TileOutput`
-- 1 `[summary]` record (after `raster::finish()`) containing domain-specific
-  validation fields:
-  - `next_output_root`, `output_root_status`, `state_root`, `gas_used`
-  - `block_hash`, `tile_count`, `tracked_tx_count`, `execution_tx_count`
-
-Fallback mode preserves the legacy whole-block path and emits a single
-`[trace]` record with the original JSON schema.
+- `fn_name` — always `execute_chunk`
+- `sequence_id` — `main`
+- `input_data` — postcard-serialized tile inputs (fixture + tile_index)
+- `output_data` — postcard-serialized `TileOutput`
+- `inputs` — parameter metadata (name and type for each parameter)
+- `output_type` — `TileOutput`
+- `sequence_coordinates` — `[0]`
 
 ### Shared execution state
 
 In native execution mode, a single `ChunkDriver` persists across all tile
-invocations within one `l2_block_execution` sequence call via thread-local
-storage. The TrieDB and cumulative EVM state are carried forward in-process
+invocations via thread-local storage with lazy initialization on the first
+tile call. The TrieDB and cumulative EVM state are carried forward in-process
 so later tiles can resume from where prior tiles left off without replaying
 from the parent checkpoint.
 
 This shared state is an optimization for the native execution path. In a real
 zkVM execution, each tile would be an independent proving unit with its own
 witness data.
+
+## Raster compiler pipeline
+
+The l2-kona-poc is a Raster program. Build and run it through the Raster
+toolchain from the `apps/workloads/l2-kona-poc` directory.
+
+### CFS extraction
+
+```bash
+cargo raster cfs
+```
+
+Produces `target/raster/cfs.json` with:
+- 1 tile: `execute_chunk` (kind: `iter`, 2 inputs, 1 output)
+- 1 sequence: `main` (10 items: `execute_chunk` x10)
+
+### Tile discovery
+
+```bash
+cargo raster list
+```
+
+Lists exactly one tile: `execute_chunk(fixture: FixtureInput, tile_index: usize) -> TileOutput`
+
+### Execution
+
+```bash
+cargo raster run --input "$(cat ../../../runs/fixtures/l2-poc-synth-fixture.json)"
+```
+
+Builds the project, runs the binary, and captures `[trace]` lines from stdout.
+The Raster runtime emits 10 trace records (one per `execute_chunk` invocation)
+with full postcard-serialized input/output data.
 
 ## Canonical fixture contract
 
@@ -238,25 +267,15 @@ executor failures.
 - Workload entrypoint: `apps/workloads/l2-kona-poc/src/main.rs`
 - Workload id: `l2-kona-poc` (wired through `crates/shared/src/raster_workload.rs`)
 - Source modules:
-  - `main.rs` — Raster program (sequence + tile), CLI, fixture validation, Kona
-    reference execution, TrieDB provider
+  - `main.rs` — Raster program (`#[sequence] fn main` + `#[tile] fn execute_chunk`),
+    Kona reference execution, TrieDB provider
   - `chunk_plan.rs` — deterministic transaction partitioning into tiles
   - `chunk_driver.rs` — per-tile EVM execution engine using Kona/alloy-op-evm
-- Input contract: the full fixture JSON is passed via `--input`
-- Chunk-plan artifact: `runs/fixtures/l2-poc-synth-chunk-plan-v1.json` generated
-  via `scripts/generate_l2_poc_chunk_plan.sh`
+- Input contract: the full fixture JSON is passed via `--input` (parsed
+  automatically by the `#[sequence]` macro on `fn main`)
 - Local witness artifacts: `fixtures/l2-poc/rollup-config-v1.json` +
   `fixtures/l2-poc/synthetic-witness-bundle-v1.json` +
   `fixtures/l2-poc/synthetic-witness-kv-v1*`
-- Execution mode:
-  - strict canonical mode (`--execution-mode strict`, default): runs the Raster
-    program with tile-level tracing
-  - fallback dev mode (`--execution-mode fallback`): whole-block execution for
-    exploratory runs
-- Strict preflight validates the witness closure manifest contract before
-  execution: bundle ref, rollup-config ref, tracked tx hashes, supplemental tx
-  hashes, block window, output-root witness, and all referenced witness KV-store
-  paths must match the canonical package.
 
 ## Witness closure manifest contract
 
@@ -290,17 +309,10 @@ scripts/generate_l2_poc_chunk_plan.sh
 
 ## Acceptance gate
 
-Run the strict acceptance check with:
-
-```bash
-scripts/check_l2_kona_strict.sh
-```
-
 Pass criteria:
 
-- Exactly 10 Raster-native trace records per run (one per tile invocation).
-- Every trace has `fn_name = "execute_chunk"`.
-- The `[summary]` record reports `output_root_status = fixture_output_root`,
-  `tracked_tx_count = 5`, `execution_tx_count = 10`, and `tile_count = 10`.
-- Two back-to-back runs produce identical `next_output_root` values.
-- Raster trace `output_data` bytes match across repeated runs.
+- `cargo raster cfs` produces 1 sequence (`main`), 1 tile (`execute_chunk`), 10 calls.
+- `cargo raster list` discovers exactly 1 tile.
+- `cargo raster run` emits exactly 10 `[trace]` records with `fn_name = "execute_chunk"` and `sequence_id = "main"`.
+- Two back-to-back runs produce identical trace record bytes.
+- `cargo test -p workload-l2-kona-poc` passes.
