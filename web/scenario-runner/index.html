@@ -648,12 +648,11 @@
         </div>
 
         <div id="tabExecute" class="tab-panel active">
-            <p id="executeHint" style="font-size:0.875rem;color:var(--text-faint);margin-bottom:0.75rem;">Run a scenario with the `l2-kona-poc` fixture-backed workload or use `stub` for a quick preview.</p>
+            <p id="executeHint" style="font-size:0.875rem;color:var(--text-faint);margin-bottom:0.75rem;">Run a scenario with the `l2-kona-poc` native L2 workload or `raster-hello` for a minimal integration test.</p>
             <div class="controls-row">
                 <select id="workloadSelect">
                     <option value="l2-kona-poc">l2-kona-poc</option>
                     <option value="raster-hello">raster-hello</option>
-                    <option value="stub">stub</option>
                 </select>
                 <div class="scenario-toggle">
                     <button id="btnHonest" class="active" onclick="setScenario('honest')">Honest</button>
@@ -725,91 +724,13 @@
 
         function updatePastRunsCount() {
             const stored = loadRuns();
-            const count = stored.length > 0 ? stored.length : (IS_LIVE ? 0 : STUB_RUNS.length);
-            document.getElementById('tabPastBtn').textContent = 'Past Runs (' + count + ')';
-        }
-
-        // ─── Stub run data ────────────────────────────────────────────────────────
-        const STUB_RUNS = [
-            {
-                id: 'run-001',
-                workload: 'raster-hello',
-                scenario: 'honest',
-                timestamp: '2026-03-05T10:14:02Z',
-                raster_pin: { revision: 'a4770be' },
-                steps: [
-                    { key: 'exec',      label: 'Native execution',    status: 'done',     metrics: { 'Execution time': '38 ms', 'Workload ID': '0xaabbccdd', 'CFS digest': '0x1a2b3c4d' } },
-                    { key: 'trace',     label: 'Trace produced',      status: 'done',     metrics: { 'Trace size': '2.4 KB', 'Tile executions': '12' } },
-                    { key: 'da',        label: 'Trace available (DA)', status: 'done',     metrics: { 'Tx hash': '0xda01...f3a2', 'Gas used': '42,100', 'Calldata size': '2.4 KB' } },
-                    { key: 'claim',     label: 'Claim submitted',     status: 'done',     metrics: { 'Claim ID': '1', 'Tx hash': '0xcl01...b7e1', 'Gas used': '68,400', 'Artifact root': '0x1a2b...3c4d', 'Result root': '0x9f8e...7d6c' } },
-                    { key: 'replay',    label: 'Challenger replay',    status: 'done',     metrics: { 'Replay time': '41 ms', 'Divergence': 'None' } },
-                    { key: 'outcome',   label: 'Settled',             status: 'settled',  outcome: 'settled', metrics: { 'Tx hash': '0xst01...cc90', 'Gas used': '34,200', 'Final state': 'Settled' } }
-                ],
-                summary: {
-                    exec_time_ms: 38,
-                    trace_size_bytes: 2457,
-                    da_gas: 42100,
-                    claim_gas: 68400,
-                    replay_time_ms: 41,
-                    fraud_proof_time_ms: null,
-                    fraud_proof_gas: null,
-                    total_time_ms: 195,
-                    outcome: 'settled'
-                }
-            },
-            {
-                id: 'run-002',
-                workload: 'raster-hello',
-                scenario: 'dishonest',
-                timestamp: '2026-03-05T10:22:48Z',
-                raster_pin: { revision: 'a4770be' },
-                steps: [
-                    { key: 'exec',      label: 'Native execution',    status: 'done',     metrics: { 'Execution time': '39 ms', 'Workload ID': '0xaabbccdd', 'CFS digest': '0x1a2b3c4d' } },
-                    { key: 'trace',     label: 'Trace produced',      status: 'done',     metrics: { 'Trace size': '2.4 KB', 'Tile executions': '12' } },
-                    { key: 'da',        label: 'Trace available (DA)', status: 'done',     metrics: { 'Tx hash': '0xda02...a1b3', 'Gas used': '42,100', 'Calldata size': '2.4 KB' } },
-                    { key: 'claim',     label: 'Claim submitted',     status: 'done',     metrics: { 'Claim ID': '2', 'Tx hash': '0xcl02...3f9d', 'Gas used': '68,400', 'Artifact root': '0xBAD0...0000', 'Result root': '0xBAD1...1111' } },
-                    { key: 'replay',    label: 'Challenger replay',    status: 'done',     metrics: { 'Replay time': '40 ms', 'Divergence': 'Detected' } },
-                    { key: 'outcome',   label: 'Slashed',             status: 'slashed',  outcome: 'slashed', metrics: { 'Fraud proof time': '6 ms', 'Tx hash': '0xch02...8c44', 'Gas used': '81,900', 'Claimer artifact root': '0xBAD0...0000', 'Challenger artifact root': '0x1a2b...3c4d', 'Final state': 'Slashed' } }
-                ],
-                summary: {
-                    exec_time_ms: 39,
-                    trace_size_bytes: 2457,
-                    da_gas: 42100,
-                    claim_gas: 68400,
-                    replay_time_ms: 40,
-                    fraud_proof_time_ms: 6,
-                    fraud_proof_gas: 81900,
-                    total_time_ms: 218,
-                    outcome: 'slashed'
-                }
-            },
-            {
-                id: 'run-003',
-                workload: 'stub',
-                scenario: 'honest',
-                timestamp: '2026-03-05T10:35:11Z',
-                raster_pin: { revision: 'a4770be' },
-                steps: [
-                    { key: 'exec',      label: 'Native execution',    status: 'done',     metrics: { 'Execution time': '4,210 ms', 'Workload ID': '0xddccbbaa', 'CFS digest': '0x5e6f7a8b' } },
-                    { key: 'trace',     label: 'Trace produced',      status: 'done',     metrics: { 'Trace size': '18.7 MB', 'Tile executions': '8,192' } },
-                    { key: 'da',        label: 'Trace available (DA)', status: 'done',     metrics: { 'Tx hash': '0xda03...9fe2', 'Gas used': '1,240,000', 'Calldata size': '18.7 MB' } },
-                    { key: 'claim',     label: 'Claim submitted',     status: 'done',     metrics: { 'Claim ID': '3', 'Tx hash': '0xcl03...77aa', 'Gas used': '68,800', 'Artifact root': '0x5e6f...7a8b', 'Result root': '0xc3d4...e5f6' } },
-                    { key: 'replay',    label: 'Challenger replay',    status: 'done',     metrics: { 'Replay time': '4,380 ms', 'Divergence': 'None' } },
-                    { key: 'outcome',   label: 'Settled',             status: 'settled',  outcome: 'settled', metrics: { 'Tx hash': '0xst03...11bb', 'Gas used': '34,200', 'Final state': 'Settled' } }
-                ],
-                summary: {
-                    exec_time_ms: 4210,
-                    trace_size_bytes: 19607552,
-                    da_gas: 1240000,
-                    claim_gas: 68800,
-                    replay_time_ms: 4380,
-                    fraud_proof_time_ms: null,
-                    fraud_proof_gas: null,
-                    total_time_ms: 14200,
-                    outcome: 'settled'
-                }
+            const count = stored.length;
+            const btn = document.getElementById('tabPastBtn');
+            btn.textContent = 'Past Runs (' + count + ')';
+            if (count > 0) {
+                btn.classList.remove('hidden');
             }
-        ];
+        }
 
         // ─── Scenario toggle ──────────────────────────────────────────────────────
         function setScenario(s) {
@@ -820,39 +741,12 @@
 
         // ─── Run execution ────────────────────────────────────────────────────────
         function startRun() {
-            if (IS_LIVE) {
-                startRunLive();
-            } else {
-                startRunStub();
+            if (!IS_LIVE) {
+                document.getElementById('lifecycleRunName').textContent =
+                    'Live server required — start with: cargo run -p web-server';
+                return;
             }
-        }
-
-        function startRunStub() {
-            const workload = document.getElementById('workloadSelect').value;
-            const scenario = currentScenario;
-
-            // Find matching stub or clone the closest match
-            const template = STUB_RUNS.find(r => r.workload === workload && r.scenario === scenario)
-                || STUB_RUNS.find(r => r.workload === workload)
-                || STUB_RUNS[0];
-
-            const run = JSON.parse(JSON.stringify(template));
-            run.id = 'run-' + Date.now();
-            run.workload = workload;
-            run.scenario = scenario;
-            run.timestamp = new Date().toISOString();
-
-            document.getElementById('runBtn').disabled = true;
-            document.getElementById('summarySection').classList.add('hidden');
-            document.getElementById('stepEmpty').style.display = 'none';
-            document.getElementById('lifecycleRunName').textContent = run.id;
-            renderStepsAnimated(run, () => {
-                showSummary(run);
-                persistRun(run);
-                renderRunsList();
-                updatePastRunsCount();
-                document.getElementById('runBtn').disabled = false;
-            });
+            startRunLive();
         }
 
         function startRunLive() {
@@ -868,14 +762,25 @@
             const list = document.getElementById('stepList');
             list.innerHTML = '';
 
-            const lifecycleSteps = [
-                { key: 'exec', label: 'Execute' },
-                { key: 'trace', label: 'Trace' },
-                { key: 'da', label: 'DA Submission' },
-                { key: 'claim', label: 'Submit Claim' },
-                { key: 'replay', label: 'Replay' },
-                { key: 'outcome', label: 'Outcome' }
-            ];
+            const isL2 = workload === 'l2-kona-poc';
+            const lifecycleSteps = isL2
+                ? [
+                    { key: 'prepare', label: 'Prepare Batch' },
+                    { key: 'exec', label: 'Execute Program' },
+                    { key: 'da', label: 'Publish to DA' },
+                    { key: 'claim', label: 'Submit Claim' },
+                    { key: 'audit', label: 'Audit' },
+                    { key: 'await-finalization', label: 'Await Finalization' },
+                    { key: 'outcome', label: 'Outcome' }
+                ]
+                : [
+                    { key: 'exec', label: 'Execute' },
+                    { key: 'trace', label: 'Trace' },
+                    { key: 'da', label: 'DA Submission' },
+                    { key: 'claim', label: 'Submit Claim' },
+                    { key: 'replay', label: 'Replay' },
+                    { key: 'outcome', label: 'Outcome' }
+                ];
 
             // Track step elements by key for incremental updates
             const stepElements = {};
@@ -936,43 +841,6 @@
             });
         }
 
-        function renderStepsAnimated(run, onComplete) {
-            const list = document.getElementById('stepList');
-            list.innerHTML = '';
-
-            // Render all steps as pending first
-            run.steps.forEach((step, i) => {
-                list.appendChild(makeStepEl(step, i === 0 ? 'running' : 'pending'));
-            });
-
-            let i = 0;
-            function advanceStep() {
-                if (i >= run.steps.length) {
-                    onComplete();
-                    return;
-                }
-                const step = run.steps[i];
-                const el = list.children[i];
-
-                // Mark current as running
-                el.querySelector('.step-dot').className = 'step-dot running';
-                el.querySelector('.step-label').className = 'step-label';
-
-                setTimeout(() => {
-                    // Mark as done with real data
-                    list.replaceChild(makeStepEl(step, step.status), el);
-                    i++;
-                    if (i < run.steps.length) {
-                        const next = list.children[i];
-                        next.querySelector('.step-dot').className = 'step-dot running';
-                        next.querySelector('.step-label').className = 'step-label';
-                    }
-                    setTimeout(advanceStep, 120);
-                }, 320);
-            }
-            advanceStep();
-        }
-
         function makeStepEl(step, statusOverride) {
             const status = statusOverride || step.status;
 
@@ -1001,8 +869,25 @@
                 metaHtml += '</div>';
             }
 
+            // Countdown timer for await-finalization in running state
+            let countdownHtml = '';
+            if (step.key === 'await-finalization' && status === 'running' && step.metrics) {
+                const period = parseInt(step.metrics['Challenge period (s)'] || '0');
+                if (period > 0) {
+                    countdownHtml = `<div class="countdown-timer" data-period="${period}" style="margin-top:0.5rem;font-size:0.8125rem;color:var(--text-muted);font-variant-numeric:tabular-nums;"></div>`;
+                }
+            }
+
             let outcomeHtml = '';
-            if (status !== 'pending' && step.outcome) {
+            if (step.key === 'outcome' && status !== 'pending') {
+                const finalState = step.metrics && step.metrics['Final state'];
+                const statusText = step.metrics && step.metrics['Status'];
+                if (status === 'settled' || finalState === 'Settled') {
+                    outcomeHtml = `<div class="outcome-block settled"><div class="outcome-label">Settled</div>Deadline passed. Claim finalized. Bond returned to claimer.</div>`;
+                } else if (status === 'slashed' || finalState === 'Slashed') {
+                    outcomeHtml = `<div class="outcome-block slashed"><div class="outcome-label">Slashed</div>Fraud detected. Claim challenged before deadline. Bond transferred to challenger.</div>`;
+                }
+            } else if (status !== 'pending' && step.outcome) {
                 if (step.outcome === 'settled') {
                     outcomeHtml = `<div class="outcome-block settled"><div class="outcome-label">Settled</div>Claim verified. No divergence detected. Chain state updated.</div>`;
                 } else if (step.outcome === 'slashed') {
@@ -1015,9 +900,30 @@
                 <div class="step-body">
                     <div class="${labelClass}">${step.label}</div>
                     ${metaHtml}
+                    ${countdownHtml}
                     ${outcomeHtml}
                 </div>
             `;
+
+            // Start countdown animation if present
+            const timerEl = div.querySelector('.countdown-timer');
+            if (timerEl) {
+                const period = parseInt(timerEl.dataset.period);
+                let remaining = period;
+                timerEl.textContent = `Challenge window: ${remaining}s remaining`;
+                const interval = setInterval(() => {
+                    remaining -= 1;
+                    if (remaining <= 0) {
+                        timerEl.textContent = 'Challenge window elapsed — settling...';
+                        clearInterval(interval);
+                    } else {
+                        timerEl.textContent = `Challenge window: ${remaining}s remaining`;
+                    }
+                }, 1000);
+                // Store interval for cleanup
+                div._countdownInterval = interval;
+            }
+
             return div;
         }
 
@@ -1044,6 +950,44 @@
                 </div>
             ` : '';
 
+            // L2 claim metadata section (only for l2-kona-poc runs)
+            const isL2Run = s.prev_output_root != null || s.start_block != null;
+            const l2Rows = isL2Run ? `
+                <div class="result-group-header">L2 Claim</div>
+                <div class="result-row">
+                    <span class="result-label">Block range</span>
+                    <span class="result-value">${s.start_block} → ${s.end_block}</span>
+                </div>
+                <div class="result-row">
+                    <span class="result-label">prevOutputRoot</span>
+                    <span class="result-value" style="font-family:monospace;font-size:0.75rem;">${s.prev_output_root || na}</span>
+                </div>
+                <div class="result-row">
+                    <span class="result-label">nextOutputRoot</span>
+                    <span class="result-value" style="font-family:monospace;font-size:0.75rem;">${s.next_output_root || na}</span>
+                </div>
+                <div class="result-row">
+                    <span class="result-label">Batch hash</span>
+                    <span class="result-value" style="font-family:monospace;font-size:0.75rem;">${s.batch_hash || na}</span>
+                </div>
+                <div class="result-row">
+                    <span class="result-label">Input blob hash</span>
+                    <span class="result-value" style="font-family:monospace;font-size:0.75rem;">${s.input_blob_versioned_hash || na}</span>
+                </div>
+                <div class="result-row">
+                    <span class="result-label">Bond amount (wei)</span>
+                    <span class="result-value">${s.bond_amount || na}</span>
+                </div>
+                <div class="result-row">
+                    <span class="result-label">Challenge deadline</span>
+                    <span class="result-value">${s.challenge_deadline != null ? new Date(s.challenge_deadline * 1000).toISOString() : na}</span>
+                </div>
+                <div class="result-row">
+                    <span class="result-label">Challenge period</span>
+                    <span class="result-value">${s.challenge_period_seconds != null ? s.challenge_period_seconds + 's' : na}</span>
+                </div>
+            ` : '';
+
             panel.innerHTML = `
                 <div class="result-group-header">Claimer</div>
                 <div class="result-row">
@@ -1062,6 +1006,7 @@
                     <span class="result-label">Claim submission gas</span>
                     <span class="result-value">${fmtGas(s.claim_gas)}</span>
                 </div>
+                ${l2Rows}
                 <div class="result-group-header">Challenger</div>
                 <div class="result-row">
                     <span class="result-label">Native replay time</span>
@@ -1119,10 +1064,7 @@
 
         function renderRunsList() {
             const stored = loadRuns();
-            const allRuns = [...stored];
-
-            // Seed with stubs if nothing stored yet (filesystem mode only)
-            const list = allRuns.length > 0 ? allRuns : (IS_LIVE ? [] : STUB_RUNS);
+            const list = [...stored];
 
             const container = document.getElementById('runsList');
             const empty = document.getElementById('runsEmpty');
@@ -1184,9 +1126,7 @@
         }
 
         function findRunById(id) {
-            const stored = loadRuns();
-            const all = stored.length > 0 ? stored : (IS_LIVE ? [] : STUB_RUNS);
-            return all.find(r => r.id === id);
+            return loadRuns().find(r => r.id === id);
         }
 
         function loadSelectedRun() {
@@ -1328,13 +1268,11 @@
         // ─── Init ─────────────────────────────────────────────────────────────────
         function init() {
             if (IS_LIVE) {
-                // Update hint text for live mode
                 document.getElementById('executeHint').textContent =
                     'Run a live scenario against the on-chain contract. Steps stream in real time.';
-
-                // Fetch past runs from the API
                 fetchAndRenderRunsList();
             } else {
+                // Filesystem mode — no server available, show any localStorage runs
                 renderRunsList();
                 updatePastRunsCount();
             }

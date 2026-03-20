@@ -7,7 +7,17 @@ Used by regression tests in `crates/shared/tests/run_fixtures.rs`:
 - `raster-hello-honest.json` — replay matches claim (`divergence.detected=false`)
 - `raster-hello-dishonest.json` — replay diverges and trace fetch is required
 
-## L2 Kona POC fixture
+## L2 Kona POC fixtures
+
+Golden run output fixtures for the L2 lifecycle:
+
+- `l2-kona-poc-honest.json` — honest L2 run: claim settles after challenge period.
+  Uses the expanded L2 lifecycle (`prepare → exec → da → claim → audit →
+  await-finalization → outcome`) with full L2 summary metadata.
+- `l2-kona-poc-dishonest.json` — dishonest L2 run: replay diverges, trace
+  fetched, claim challenged and slashed before deadline.
+
+L2 fixture input files:
 
 - `l2-poc-synth-fixture.json` — canonical synthetic L2 fixture input (seeded
   checkpoint + 5 tracked txs + 5 supplemental block txs + seeded output-root

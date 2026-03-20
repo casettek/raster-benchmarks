@@ -25,10 +25,7 @@ pub fn warmup_known_workloads() -> Result<()> {
 }
 
 pub fn run(workload: &str, run_id: &str) -> Result<Option<RasterWorkloadResult>> {
-    let spec = match workload {
-        "stub" => return Ok(None),
-        _ => workload_spec(workload)?,
-    };
+    let spec = workload_spec(workload)?;
 
     ensure_workload_binary(&spec)?;
     let input_json = workload_input_json(&spec)?;
@@ -129,7 +126,7 @@ fn workload_spec(workload: &str) -> Result<WorkloadSpec> {
             input: WorkloadInput::FixtureFile("runs/fixtures/l2-poc-synth-fixture.json"),
         }),
         _ => Err(eyre!(
-            "Unknown workload '{}'. Expected 'stub', 'raster-hello', or 'l2-kona-poc'.",
+            "Unknown workload '{}'. Expected 'raster-hello' or 'l2-kona-poc'.",
             workload
         )),
     }

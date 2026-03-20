@@ -99,6 +99,24 @@ DA/blob references are part of claim packaging, not part of execution input.
 The canonical chunk plan is a sidecar replay contract derived from the same
 fixture, not an additional user-facing runtime input field in this phase.
 
+## Run lifecycle
+
+L2 runs use the expanded lifecycle:
+
+1. **Prepare Batch** — load the canonical synthetic fixture and derive batch identity.
+2. **Execute Program** — run the Raster program (10 chunked tile invocations). Trace
+   artifacts are folded into execution (no separate `trace` step).
+3. **Publish to DA** — publish trace payload via blob tx.
+4. **Submit Claim** — submit blob-carrying settlement claim with bond, binding:
+   `prevOutputRoot`, `nextOutputRoot`, `startBlock`, `endBlock`, `batchHash`,
+   `inputBlobVersionedHash`.
+5. **Audit** — independent local replay comparison with conditional trace fetch.
+6. **Await Finalization** — challenge-period countdown (120s default).
+7. **Outcome** — terminal `Settled` (honest) or `Slashed` (dishonest).
+
+Golden run fixtures for both paths are at `runs/fixtures/l2-kona-poc-honest.json`
+and `runs/fixtures/l2-kona-poc-dishonest.json`.
+
 ## Scenario assertions
 
 ### Honest scenario
@@ -114,6 +132,8 @@ fixture, not an additional user-facing runtime input field in this phase.
 - Submits L2 settlement claim with claimer bond, binding:
   `prevOutputRoot`, `nextOutputRoot`, `startBlock`, `endBlock`, `batchHash`.
 - Contract records `challengeDeadline = createdAt + challengePeriod`.
+- Audit step confirms no divergence; trace fetch is `skipped`.
+- Await-finalization step waits for the challenge deadline to pass.
 - After challenge deadline, claim settles and bond is returned to claimer.
 - Canonical deterministic `nextOutputRoot` for the synthetic fixture:
   `0xe13f82b2b6e02d94a7b1a2a5a8ca21da71c7d14c1e3e35d97687e7bf86425b17`
@@ -122,7 +142,9 @@ fixture, not an additional user-facing runtime input field in this phase.
 
 - Uses same canonical fixture input bytes and block target.
 - Replay/audit flow computes a deliberately wrong `nextOutputRoot` (byte-flipped).
+- Audit step detects divergence and fetches trace payload from DA pointer.
 - Challenger calls `challengeClaim` with the divergent root before the deadline.
+- Await-finalization step shows `Challenged before deadline`.
 - Contract transitions to `Slashed`, bond transferred to challenger.
 - Replay/audit flow classifies divergence deterministically and emits structured
   divergence report.

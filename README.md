@@ -31,7 +31,7 @@ cargo run -p web-server
 
 Note: first startup may take longer because the server warms Raster workload binaries once.
 
-Open `http://localhost:8010/scenario-runner/` in a browser. Select a scenario (honest/dishonest) and click **Run**. Steps stream in real time via SSE as the on-chain pipeline executes.
+Open `http://localhost:8010/scenario-runner/` in a browser. Select a workload (`l2-kona-poc` or `raster-hello`), a scenario (honest/dishonest), and click **Run**. Steps stream in real time via SSE as the on-chain pipeline executes.
 
 Completed runs appear in the **Past Runs** tab. Select two runs and click **Compare** for side-by-side metrics.
 
@@ -43,6 +43,32 @@ cargo run -p runner -- --scenario dishonest --workload raster-hello
 ```
 
 Each run writes a JSON file to `runs/` with the full step-by-step results.
+
+### 5. Run the L2 Kona POC demo
+
+The `l2-kona-poc` workload demonstrates the full L2 optimistic settlement lifecycle:
+canonical batch preparation, chunked tile execution (10 tiles), blob-carrying claim
+submission, audit replay, challenge-period countdown, and terminal finalization or rejection.
+
+```bash
+# Honest path — claim settles after challenge period
+cargo run -p runner -- --scenario honest --workload l2-kona-poc
+
+# Dishonest path — claim is challenged and slashed before deadline
+cargo run -p runner -- --scenario dishonest --workload l2-kona-poc
+```
+
+The L2 lifecycle uses an expanded step sequence:
+
+1. **Prepare Batch** — loads the canonical synthetic fixture and identifies the batch
+2. **Execute Program** — runs the Raster program (10 chunked tile invocations)
+3. **Publish to DA** — publishes trace payload for audit
+4. **Submit Claim** — submits the blob-carrying settlement claim with bond
+5. **Audit** — independent local replay comparison
+6. **Await Finalization** — challenge-period countdown (120s default on Anvil)
+7. **Outcome** — terminal `Settled` or `Slashed` state
+
+The web UI (`/scenario-runner/`) shows a live countdown timer during the `Await Finalization` step and displays full L2 claim metadata (block range, output roots, batch hash, bond amount) in the summary panel.
 
 ### 5. Environment variables
 
@@ -70,6 +96,7 @@ web/             Static HTML tools (scenario runner, settlement estimator)
 
 The web server exposes:
 
+- `GET /api/run?workload=l2-kona-poc&scenario=honest` — SSE stream of L2 run progress
 - `GET /api/run?workload=raster-hello&scenario=honest` — SSE stream of run progress
 - `GET /api/runs` — JSON array of all past runs (newest first)
 - `GET /api/runs/:id` — single run by ID (or 404)

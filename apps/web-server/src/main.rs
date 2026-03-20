@@ -15,8 +15,8 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use shared::anvil::AnvilProvider;
 use shared::challenger::ReplayMode;
-use shared::claimer::{L2ClaimInput, stub_l2_claim_input};
-use shared::deploy::DEFAULT_MIN_BOND;
+use shared::claimer::{L2ClaimInput, default_l2_claim_input};
+use shared::deploy::{DEFAULT_CHALLENGE_PERIOD, DEFAULT_MIN_BOND};
 use shared::raster_workload;
 use shared::run::{DivergenceSummary, RasterPin, RunOutput, StepOutput, SummaryOutput};
 use tokio::sync::Mutex;
@@ -134,7 +134,7 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-/// `GET /api/run?workload=stub&scenario=honest`
+/// `GET /api/run?workload=l2-kona-poc&scenario=honest`
 ///
 /// Returns `text/event-stream` with step-by-step progress.
 /// Uses GET + query params so the browser `EventSource` can connect directly.
@@ -142,7 +142,7 @@ async fn handle_run_sse(
     State(state): State<Arc<AppState>>,
     Query(params): Query<RunParams>,
 ) -> Result<Sse<ReceiverStream<Result<Event, Infallible>>>, impl IntoResponse> {
-    let workload = params.workload.unwrap_or_else(|| "stub".to_string());
+    let workload = params.workload.unwrap_or_else(|| "l2-kona-poc".to_string());
     let scenario = params.scenario.unwrap_or_else(|| "honest".to_string());
 
     if scenario != "honest" && scenario != "dishonest" {
@@ -221,7 +221,7 @@ fn resolve_l2_claim_input(workload: &str) -> eyre::Result<L2ClaimInput> {
             batch_hash,
         })
     } else {
-        Ok(stub_l2_claim_input())
+        Ok(default_l2_claim_input())
     }
 }
 
@@ -240,6 +240,12 @@ fn parse_hex_bytes32(hex_str: &str) -> eyre::Result<[u8; 32]> {
 }
 
 /// Execute the full claim/challenge pipeline, emitting SSE events along the way.
+///
+/// For L2 workloads (`l2-kona-poc`), uses the expanded lifecycle:
+///   prepare → exec → da → claim → audit → await-finalization → outcome
+///
+/// For other workloads, uses the legacy lifecycle:
+///   exec → trace → da → claim → replay → outcome
 async fn run_pipeline(
     state: Arc<AppState>,
     tx: tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
@@ -254,6 +260,7 @@ async fn run_pipeline(
         workload,
         scenario
     );
+    let is_l2 = workload == "l2-kona-poc";
 
     // Helper to send an SSE event (ignore send errors if client disconnected)
     let send = |tx: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>, event: Event| {
@@ -263,27 +270,48 @@ async fn run_pipeline(
         }
     };
 
-    // Emit Raster-only steps as pending immediately for early UI feedback.
-    for (key, label) in [
-        ("exec", "Execute"),
-        ("trace", "Trace"),
-        ("da", "DA Submission"),
-    ] {
-        let step_data = serde_json::json!({
-            "key": key,
-            "label": label,
-            "status": "pending",
-            "metrics": {}
-        });
-        send(
-            &tx,
-            Event::default().event("step").data(step_data.to_string()),
-        )
-        .await;
+    // Emit initial pending steps for early UI feedback.
+    if is_l2 {
+        // L2 lifecycle: prepare → exec → da → claim → audit → await-finalization → outcome
+        for (key, label) in [
+            ("prepare", "Prepare Batch"),
+            ("exec", "Execute Program"),
+            ("da", "Publish to DA"),
+        ] {
+            let step_data = serde_json::json!({
+                "key": key,
+                "label": label,
+                "status": "pending",
+                "metrics": {}
+            });
+            send(
+                &tx,
+                Event::default().event("step").data(step_data.to_string()),
+            )
+            .await;
+        }
+    } else {
+        // Legacy lifecycle: exec → trace → da → claim → replay → outcome
+        for (key, label) in [
+            ("exec", "Execute"),
+            ("trace", "Trace"),
+            ("da", "DA Submission"),
+        ] {
+            let step_data = serde_json::json!({
+                "key": key,
+                "label": label,
+                "status": "pending",
+                "metrics": {}
+            });
+            send(
+                &tx,
+                Event::default().event("step").data(step_data.to_string()),
+            )
+            .await;
+        }
     }
 
-    // For phase 3, we redeploy the contract per run for clean state.
-    // This ensures no claim ID conflicts across runs.
+    // Redeploy the contract per run for clean state.
     let contract_address =
         match shared::deploy::deploy_claim_verifier(&state.provider, &state.forge_out_dir).await {
             Ok(addr) => addr,
@@ -300,19 +328,81 @@ async fn run_pipeline(
             }
         };
 
-    if workload != "stub" {
-        let exec_running = serde_json::json!({
-            "key": "exec",
-            "label": "Execute",
+    // --- Prepare step (L2 only) ---
+    if is_l2 {
+        let prepare_running = serde_json::json!({
+            "key": "prepare",
+            "label": "Prepare Batch",
             "status": "running",
             "metrics": {}
         });
         send(
             &tx,
-            Event::default().event("step").data(exec_running.to_string()),
+            Event::default()
+                .event("step")
+                .data(prepare_running.to_string()),
         )
         .await;
     }
+
+    // Resolve L2 claim input early so we can show batch metadata in prepare step
+    let l2_input = match resolve_l2_claim_input(&workload) {
+        Ok(input) => input,
+        Err(e) => {
+            let _ = tx
+                .send(Ok(Event::default().event("error").data(
+                    serde_json::to_string(&ErrorPayload {
+                        message: format!("Failed to resolve L2 claim input: {e}"),
+                    })
+                    .unwrap_or_default(),
+                )))
+                .await;
+            return;
+        }
+    };
+
+    if is_l2 {
+        let mut prepare_metrics = HashMap::new();
+        prepare_metrics.insert(
+            "Fixture".to_string(),
+            "l2-poc-synth-fixture.json".to_string(),
+        );
+        prepare_metrics.insert(
+            "Batch hash".to_string(),
+            format!("0x{}", alloy::hex::encode(l2_input.batch_hash)),
+        );
+        prepare_metrics.insert(
+            "Block range".to_string(),
+            format!("{} → {}", l2_input.start_block, l2_input.end_block),
+        );
+        let prepare_done = serde_json::json!({
+            "key": "prepare",
+            "label": "Prepare Batch",
+            "status": "done",
+            "metrics": prepare_metrics
+        });
+        send(
+            &tx,
+            Event::default()
+                .event("step")
+                .data(prepare_done.to_string()),
+        )
+        .await;
+    }
+
+    // --- Execute step ---
+    let exec_label = if is_l2 { "Execute Program" } else { "Execute" };
+    let exec_running = serde_json::json!({
+        "key": "exec",
+        "label": exec_label,
+        "status": "running",
+        "metrics": {}
+    });
+    send(
+        &tx,
+        Event::default().event("step").data(exec_running.to_string()),
+    )
+    .await;
 
     let raster_workload_result = match raster_workload::run(&workload, &run_id) {
         Ok(result) => result,
@@ -330,9 +420,10 @@ async fn run_pipeline(
     };
 
     if let Some(result) = &raster_workload_result {
+        let exec_label = if is_l2 { "Execute Program" } else { "Execute" };
         let exec_done = serde_json::json!({
             "key": "exec",
-            "label": "Execute",
+            "label": exec_label,
             "status": "done",
             "metrics": raster_workload::exec_step_metrics(result, &workload)
         });
@@ -342,35 +433,46 @@ async fn run_pipeline(
         )
         .await;
 
-        let trace_running = serde_json::json!({
-            "key": "trace",
-            "label": "Trace",
-            "status": "running",
-            "metrics": {}
-        });
-        send(
-            &tx,
-            Event::default().event("step").data(trace_running.to_string()),
-        )
-        .await;
+        // Trace step (non-L2 only; L2 folds trace into exec)
+        if !is_l2 {
+            let trace_running = serde_json::json!({
+                "key": "trace",
+                "label": "Trace",
+                "status": "running",
+                "metrics": {}
+            });
+            send(
+                &tx,
+                Event::default()
+                    .event("step")
+                    .data(trace_running.to_string()),
+            )
+            .await;
 
-        let trace_done = serde_json::json!({
-            "key": "trace",
-            "label": "Trace",
-            "status": "done",
-            "metrics": raster_workload::trace_step_metrics(result)
-        });
-        send(
-            &tx,
-            Event::default().event("step").data(trace_done.to_string()),
-        )
-        .await;
+            let trace_done = serde_json::json!({
+                "key": "trace",
+                "label": "Trace",
+                "status": "done",
+                "metrics": raster_workload::trace_step_metrics(result)
+            });
+            send(
+                &tx,
+                Event::default().event("step").data(trace_done.to_string()),
+            )
+            .await;
+        }
     }
 
+    // --- DA step ---
+    let da_label = if is_l2 {
+        "Publish to DA"
+    } else {
+        "DA Submission"
+    };
     let da_publication = if let Some(result) = &raster_workload_result {
         let da_running = serde_json::json!({
             "key": "da",
-            "label": "DA Submission",
+            "label": da_label,
             "status": "running",
             "metrics": {}
         });
@@ -431,7 +533,7 @@ async fn run_pipeline(
 
         let da_done = serde_json::json!({
             "key": "da",
-            "label": "DA Submission",
+            "label": da_label,
             "status": "done",
             "metrics": {
                 "Blob tx hash": publication.trace_tx_hash.clone(),
@@ -452,23 +554,7 @@ async fn run_pipeline(
         None
     };
 
-    // Resolve L2 claim input for the workload
-    let l2_input = match resolve_l2_claim_input(&workload) {
-        Ok(input) => input,
-        Err(e) => {
-            let _ = tx
-                .send(Ok(Event::default().event("error").data(
-                    serde_json::to_string(&ErrorPayload {
-                        message: format!("Failed to resolve L2 claim input: {e}"),
-                    })
-                    .unwrap_or_default(),
-                )))
-                .await;
-            return;
-        }
-    };
-
-    // Emit claim step as "running"
+    // --- Claim step ---
     let claim_running = serde_json::json!({
         "key": "claim",
         "label": "Submit Claim",
@@ -483,7 +569,6 @@ async fn run_pipeline(
     )
     .await;
 
-    // Submit claim
     let claim_result = match shared::claimer::submit_claim(
         &state.provider,
         contract_address,
@@ -507,46 +592,7 @@ async fn run_pipeline(
         }
     };
 
-    // Emit claim step as "done" with metrics
-    let mut claim_metrics = HashMap::new();
-    claim_metrics.insert("Claim ID".to_string(), claim_result.claim_id.to_string());
-    claim_metrics.insert("Tx hash".to_string(), claim_result.tx_hash.clone());
-    claim_metrics.insert("Gas used".to_string(), claim_result.gas_used.to_string());
-    claim_metrics.insert(
-        "prevOutputRoot".to_string(),
-        claim_result.prev_output_root.clone(),
-    );
-    claim_metrics.insert(
-        "nextOutputRoot".to_string(),
-        claim_result.next_output_root.clone(),
-    );
-    claim_metrics.insert(
-        "startBlock".to_string(),
-        claim_result.start_block.to_string(),
-    );
-    claim_metrics.insert("endBlock".to_string(), claim_result.end_block.to_string());
-    claim_metrics.insert("batchHash".to_string(), claim_result.batch_hash.clone());
-    claim_metrics.insert(
-        "Bond amount".to_string(),
-        claim_result.bond_amount.clone(),
-    );
-    claim_metrics.insert(
-        "Challenge deadline".to_string(),
-        claim_result.challenge_deadline.to_string(),
-    );
-    claim_metrics.insert(
-        "Trace tx hash".to_string(),
-        claim_result.trace_tx_hash.clone(),
-    );
-    claim_metrics.insert(
-        "Trace payload bytes".to_string(),
-        claim_result.trace_payload_bytes.to_string(),
-    );
-    claim_metrics.insert(
-        "Trace codec id".to_string(),
-        claim_result.trace_codec_id.to_string(),
-    );
-
+    let claim_metrics = build_claim_metrics(&claim_result);
     let claim_done = serde_json::json!({
         "key": "claim",
         "label": "Submit Claim",
@@ -559,88 +605,235 @@ async fn run_pipeline(
     )
     .await;
 
-    // Challenger step
-    let replay_running = serde_json::json!({
-        "key": "replay",
-        "label": "Replay",
-        "status": "running",
-        "metrics": {}
-    });
-    send(
-        &tx,
-        Event::default()
-            .event("step")
-            .data(replay_running.to_string()),
-    )
-    .await;
-
+    // --- Audit / Replay + Await Finalization ---
     let replay_mode = if scenario == "honest" {
         ReplayMode::Honest
     } else {
         ReplayMode::DishonestSimulation
     };
-    let resolution = match shared::challenger::resolve_claim_with_replay(
-        &state.provider,
-        contract_address,
-        claim_result.claim_id,
-        replay_mode,
-        &l2_input,
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(e) => {
-            let _ = tx
-                .send(Ok(Event::default().event("error").data(
-                    serde_json::to_string(&ErrorPayload {
-                        message: format!("Replay/challenge resolution failed: {e}"),
-                    })
-                    .unwrap_or_default(),
-                )))
-                .await;
-            return;
+
+    let resolution = if is_l2 {
+        // Two-phase: audit → await-finalization → finalize
+
+        // Audit step
+        let audit_running = serde_json::json!({
+            "key": "audit",
+            "label": "Audit",
+            "status": "running",
+            "metrics": {}
+        });
+        send(
+            &tx,
+            Event::default()
+                .event("step")
+                .data(audit_running.to_string()),
+        )
+        .await;
+
+        let audit = match shared::challenger::audit_claim(
+            &state.provider,
+            contract_address,
+            claim_result.claim_id,
+            replay_mode,
+            &l2_input,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                let _ = tx
+                    .send(Ok(Event::default().event("error").data(
+                        serde_json::to_string(&ErrorPayload {
+                            message: format!("Audit failed: {e}"),
+                        })
+                        .unwrap_or_default(),
+                    )))
+                    .await;
+                return;
+            }
+        };
+
+        let mut audit_metrics = HashMap::new();
+        audit_metrics.insert(
+            "Replay time (ms)".to_string(),
+            audit.replay_time_ms.to_string(),
+        );
+        audit_metrics.insert(
+            "Divergence".to_string(),
+            if audit.divergence.detected {
+                "Detected".to_string()
+            } else {
+                "None".to_string()
+            },
+        );
+        audit_metrics.insert("Reason".to_string(), audit.divergence.reason.clone());
+        audit_metrics.insert(
+            "Trace fetch".to_string(),
+            audit.divergence.trace_fetch_status.clone(),
+        );
+        if let Some(index) = audit.divergence.first_divergence_index {
+            audit_metrics.insert("First divergence index".to_string(), index.to_string());
         }
-    };
 
-    let mut replay_metrics = HashMap::new();
-    replay_metrics.insert(
-        "Replay time (ms)".to_string(),
-        resolution.replay_time_ms.to_string(),
-    );
-    replay_metrics.insert(
-        "Divergence".to_string(),
-        if resolution.divergence.detected {
-            "Detected".to_string()
+        let audit_done = serde_json::json!({
+            "key": "audit",
+            "label": "Audit",
+            "status": "done",
+            "metrics": audit_metrics
+        });
+        send(
+            &tx,
+            Event::default().event("step").data(audit_done.to_string()),
+        )
+        .await;
+
+        // Await finalization step
+        let await_running = serde_json::json!({
+            "key": "await-finalization",
+            "label": "Await Finalization",
+            "status": "running",
+            "metrics": {
+                "Challenge deadline": audit.challenge_deadline.to_string(),
+                "Challenge period (s)": audit.challenge_period.to_string()
+            }
+        });
+        send(
+            &tx,
+            Event::default()
+                .event("step")
+                .data(await_running.to_string()),
+        )
+        .await;
+
+        let resolution = match shared::challenger::finalize_claim(
+            &state.provider,
+            contract_address,
+            claim_result.claim_id,
+            &audit,
+            &l2_input,
+            replay_mode,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                let _ = tx
+                    .send(Ok(Event::default().event("error").data(
+                        serde_json::to_string(&ErrorPayload {
+                            message: format!("Finalization failed: {e}"),
+                        })
+                        .unwrap_or_default(),
+                    )))
+                    .await;
+                return;
+            }
+        };
+
+        let await_status_text = if audit.divergence.detected {
+            "Challenged before deadline".to_string()
         } else {
-            "None".to_string()
-        },
-    );
-    replay_metrics.insert("Reason".to_string(), resolution.divergence.reason.clone());
-    replay_metrics.insert(
-        "Trace fetch".to_string(),
-        resolution.divergence.trace_fetch_status.clone(),
-    );
-    if let Some(index) = resolution.divergence.first_divergence_index {
-        replay_metrics.insert("First divergence index".to_string(), index.to_string());
-    }
+            "Deadline passed — settling".to_string()
+        };
+        let await_done = serde_json::json!({
+            "key": "await-finalization",
+            "label": "Await Finalization",
+            "status": "done",
+            "metrics": {
+                "Challenge deadline": audit.challenge_deadline.to_string(),
+                "Challenge period (s)": audit.challenge_period.to_string(),
+                "Status": await_status_text
+            }
+        });
+        send(
+            &tx,
+            Event::default().event("step").data(await_done.to_string()),
+        )
+        .await;
 
-    let replay_done = serde_json::json!({
-        "key": "replay",
-        "label": "Replay",
-        "status": "done",
-        "metrics": replay_metrics
-    });
-    send(
-        &tx,
-        Event::default().event("step").data(replay_done.to_string()),
-    )
-    .await;
+        resolution
+    } else {
+        // Legacy: combined replay step
+        let replay_running = serde_json::json!({
+            "key": "replay",
+            "label": "Replay",
+            "status": "running",
+            "metrics": {}
+        });
+        send(
+            &tx,
+            Event::default()
+                .event("step")
+                .data(replay_running.to_string()),
+        )
+        .await;
+
+        let resolution = match shared::challenger::resolve_claim_with_replay(
+            &state.provider,
+            contract_address,
+            claim_result.claim_id,
+            replay_mode,
+            &l2_input,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                let _ = tx
+                    .send(Ok(Event::default().event("error").data(
+                        serde_json::to_string(&ErrorPayload {
+                            message: format!("Replay/challenge resolution failed: {e}"),
+                        })
+                        .unwrap_or_default(),
+                    )))
+                    .await;
+                return;
+            }
+        };
+
+        let mut replay_metrics = HashMap::new();
+        replay_metrics.insert(
+            "Replay time (ms)".to_string(),
+            resolution.replay_time_ms.to_string(),
+        );
+        replay_metrics.insert(
+            "Divergence".to_string(),
+            if resolution.divergence.detected {
+                "Detected".to_string()
+            } else {
+                "None".to_string()
+            },
+        );
+        replay_metrics.insert("Reason".to_string(), resolution.divergence.reason.clone());
+        replay_metrics.insert(
+            "Trace fetch".to_string(),
+            resolution.divergence.trace_fetch_status.clone(),
+        );
+        if let Some(index) = resolution.divergence.first_divergence_index {
+            replay_metrics.insert("First divergence index".to_string(), index.to_string());
+        }
+
+        let replay_done = serde_json::json!({
+            "key": "replay",
+            "label": "Replay",
+            "status": "done",
+            "metrics": replay_metrics
+        });
+        send(
+            &tx,
+            Event::default().event("step").data(replay_done.to_string()),
+        )
+        .await;
+
+        resolution
+    };
 
     let outcome_status = if resolution.final_state == "Settled" {
         "settled"
     } else {
         "slashed"
     };
+
+    // --- Outcome step ---
     let mut outcome_metrics = HashMap::new();
     outcome_metrics.insert("Tx hash".to_string(), resolution.tx_hash.clone());
     outcome_metrics.insert("Gas used".to_string(), resolution.gas_used.to_string());
@@ -672,7 +865,6 @@ async fn run_pipeline(
         );
     }
 
-    // Emit outcome step
     let outcome_step = serde_json::json!({
         "key": "outcome",
         "label": "Outcome",
@@ -687,131 +879,30 @@ async fn run_pipeline(
     )
     .await;
 
-    // Assemble RunOutput
-    let steps = vec![
-        if let Some(result) = &raster_workload_result {
-            StepOutput {
-                key: "exec".to_string(),
-                label: "Execute".to_string(),
-                status: "done".to_string(),
-                metrics: raster_workload::exec_step_metrics(result, &workload),
-            }
-        } else {
-            StepOutput {
-                key: "exec".to_string(),
-                label: "Execute".to_string(),
-                status: "pending".to_string(),
-                metrics: HashMap::new(),
-            }
-        },
-        if let Some(result) = &raster_workload_result {
-            StepOutput {
-                key: "trace".to_string(),
-                label: "Trace".to_string(),
-                status: "done".to_string(),
-                metrics: raster_workload::trace_step_metrics(result),
-            }
-        } else {
-            StepOutput {
-                key: "trace".to_string(),
-                label: "Trace".to_string(),
-                status: "pending".to_string(),
-                metrics: HashMap::new(),
-            }
-        },
-        if let Some(publication) = &da_publication {
-            StepOutput {
-                key: "da".to_string(),
-                label: "DA Submission".to_string(),
-                status: "done".to_string(),
-                metrics: HashMap::from([
-                    (
-                        "Blob tx hash".to_string(),
-                        publication.trace_tx_hash.clone(),
-                    ),
-                    (
-                        "Payload bytes".to_string(),
-                        publication.payload_bytes.to_string(),
-                    ),
-                    ("Codec id".to_string(), publication.codec_id.to_string()),
-                    ("Gas used".to_string(), publication.gas_used.to_string()),
-                    ("Payload hash".to_string(), publication.payload_hash.clone()),
-                ]),
-            }
-        } else {
-            StepOutput {
-                key: "da".to_string(),
-                label: "DA Submission".to_string(),
-                status: "pending".to_string(),
-                metrics: HashMap::new(),
-            }
-        },
-        StepOutput {
-            key: "claim".to_string(),
-            label: "Submit Claim".to_string(),
-            status: "done".to_string(),
-            metrics: claim_metrics,
-        },
-        StepOutput {
-            key: "replay".to_string(),
-            label: "Replay".to_string(),
-            status: "done".to_string(),
-            metrics: {
-                let mut m = HashMap::new();
-                m.insert(
-                    "Replay time (ms)".to_string(),
-                    resolution.replay_time_ms.to_string(),
-                );
-                m.insert(
-                    "Divergence".to_string(),
-                    if resolution.divergence.detected {
-                        "Detected"
-                    } else {
-                        "None"
-                    }
-                    .to_string(),
-                );
-                m.insert("Reason".to_string(), resolution.divergence.reason.clone());
-                m.insert(
-                    "Trace fetch".to_string(),
-                    resolution.divergence.trace_fetch_status.clone(),
-                );
-                if let Some(index) = resolution.divergence.first_divergence_index {
-                    m.insert("First divergence index".to_string(), index.to_string());
-                }
-                m
-            },
-        },
-        StepOutput {
-            key: "outcome".to_string(),
-            label: "Outcome".to_string(),
-            status: outcome_status.to_string(),
-            metrics: outcome_metrics.clone(),
-        },
-    ];
+    // --- Assemble RunOutput ---
+    let total_time_ms = Some(total_start.elapsed().as_millis().min(u64::MAX as u128) as u64);
 
-    let summary = SummaryOutput {
-        exec_time_ms: raster_workload_result.as_ref().map(|r| r.exec_time_ms),
-        trace_size_bytes: raster_workload_result.as_ref().map(|r| r.trace_size_bytes),
-        da_gas: da_publication
-            .as_ref()
-            .map(|publication| publication.gas_used),
-        claim_gas: claim_result.gas_used,
-        replay_time_ms: Some(resolution.replay_time_ms),
-        fraud_proof_time_ms: None,
-        fraud_proof_gas: None,
-        proof_status: resolution.proof_status.clone(),
-        divergence: Some(DivergenceSummary {
-            detected: resolution.divergence.detected,
-            reason: resolution.divergence.reason.clone(),
-            first_divergence_index: resolution.divergence.first_divergence_index,
-            trace_fetch_status: resolution.divergence.trace_fetch_status.clone(),
-            trace_tx_hash: resolution.divergence.trace_tx_hash.clone(),
-            trace_payload_bytes: resolution.divergence.trace_payload_bytes,
-        }),
-        total_time_ms: Some(total_start.elapsed().as_millis().min(u64::MAX as u128) as u64),
-        outcome: outcome_status.to_string(),
-    };
+    let steps = build_steps_from_results(
+        is_l2,
+        &workload,
+        &raster_workload_result,
+        &da_publication,
+        &claim_result,
+        &claim_metrics,
+        &resolution,
+        outcome_status,
+        &outcome_metrics,
+    );
+
+    let summary = build_summary(
+        &raster_workload_result,
+        &da_publication,
+        &claim_result,
+        &resolution,
+        outcome_status,
+        is_l2,
+        total_time_ms,
+    );
 
     let run_output = RunOutput {
         id: run_id.clone(),
@@ -848,6 +939,343 @@ async fn run_pipeline(
             .event("done")
             .data(done_data.to_string())))
         .await;
+}
+
+/// Build claim step metrics from a `ClaimResult`.
+fn build_claim_metrics(claim_result: &shared::claimer::ClaimResult) -> HashMap<String, String> {
+    let mut m = HashMap::new();
+    m.insert("Claim ID".to_string(), claim_result.claim_id.to_string());
+    m.insert("Tx hash".to_string(), claim_result.tx_hash.clone());
+    m.insert("Gas used".to_string(), claim_result.gas_used.to_string());
+    m.insert(
+        "prevOutputRoot".to_string(),
+        claim_result.prev_output_root.clone(),
+    );
+    m.insert(
+        "nextOutputRoot".to_string(),
+        claim_result.next_output_root.clone(),
+    );
+    m.insert(
+        "startBlock".to_string(),
+        claim_result.start_block.to_string(),
+    );
+    m.insert("endBlock".to_string(), claim_result.end_block.to_string());
+    m.insert("batchHash".to_string(), claim_result.batch_hash.clone());
+    m.insert(
+        "Bond amount".to_string(),
+        claim_result.bond_amount.clone(),
+    );
+    m.insert(
+        "Challenge deadline".to_string(),
+        claim_result.challenge_deadline.to_string(),
+    );
+    m.insert(
+        "Trace tx hash".to_string(),
+        claim_result.trace_tx_hash.clone(),
+    );
+    m.insert(
+        "Trace payload bytes".to_string(),
+        claim_result.trace_payload_bytes.to_string(),
+    );
+    m.insert(
+        "Trace codec id".to_string(),
+        claim_result.trace_codec_id.to_string(),
+    );
+    m
+}
+
+/// Build the ordered steps vector for persisted run output.
+#[allow(clippy::too_many_arguments)]
+fn build_steps_from_results(
+    is_l2: bool,
+    workload: &str,
+    raster_result: &Option<raster_workload::RasterWorkloadResult>,
+    da_publication: &Option<shared::da::TracePublication>,
+    claim_result: &shared::claimer::ClaimResult,
+    claim_metrics: &HashMap<String, String>,
+    resolution: &shared::challenger::AuditResolution,
+    outcome_status: &str,
+    outcome_metrics: &HashMap<String, String>,
+) -> Vec<StepOutput> {
+    let mut steps = Vec::new();
+
+    // Prepare step (L2 only)
+    if is_l2 {
+        let mut metrics = HashMap::new();
+        metrics.insert(
+            "Fixture".to_string(),
+            "l2-poc-synth-fixture.json".to_string(),
+        );
+        metrics.insert("Batch hash".to_string(), claim_result.batch_hash.clone());
+        metrics.insert(
+            "Block range".to_string(),
+            format!("{} → {}", claim_result.start_block, claim_result.end_block),
+        );
+        steps.push(StepOutput {
+            key: "prepare".to_string(),
+            label: "Prepare Batch".to_string(),
+            status: "done".to_string(),
+            metrics,
+        });
+    }
+
+    // Exec step
+    if let Some(result) = raster_result {
+        steps.push(StepOutput {
+            key: "exec".to_string(),
+            label: if is_l2 {
+                "Execute Program".to_string()
+            } else {
+                "Execute".to_string()
+            },
+            status: "done".to_string(),
+            metrics: raster_workload::exec_step_metrics(result, workload),
+        });
+    } else {
+        steps.push(StepOutput {
+            key: "exec".to_string(),
+            label: "Execute".to_string(),
+            status: "pending".to_string(),
+            metrics: HashMap::new(),
+        });
+    }
+
+    // Trace step (non-L2 only)
+    if !is_l2 {
+        if let Some(result) = raster_result {
+            steps.push(StepOutput {
+                key: "trace".to_string(),
+                label: "Trace".to_string(),
+                status: "done".to_string(),
+                metrics: raster_workload::trace_step_metrics(result),
+            });
+        } else {
+            steps.push(StepOutput {
+                key: "trace".to_string(),
+                label: "Trace".to_string(),
+                status: "pending".to_string(),
+                metrics: HashMap::new(),
+            });
+        }
+    }
+
+    // DA step
+    let da_label = if is_l2 {
+        "Publish to DA"
+    } else {
+        "DA Submission"
+    };
+    if let Some(publication) = da_publication {
+        steps.push(StepOutput {
+            key: "da".to_string(),
+            label: da_label.to_string(),
+            status: "done".to_string(),
+            metrics: HashMap::from([
+                (
+                    "Blob tx hash".to_string(),
+                    publication.trace_tx_hash.clone(),
+                ),
+                (
+                    "Payload bytes".to_string(),
+                    publication.payload_bytes.to_string(),
+                ),
+                ("Codec id".to_string(), publication.codec_id.to_string()),
+                ("Gas used".to_string(), publication.gas_used.to_string()),
+                ("Payload hash".to_string(), publication.payload_hash.clone()),
+            ]),
+        });
+    } else {
+        steps.push(StepOutput {
+            key: "da".to_string(),
+            label: da_label.to_string(),
+            status: "pending".to_string(),
+            metrics: HashMap::new(),
+        });
+    }
+
+    // Claim step
+    steps.push(StepOutput {
+        key: "claim".to_string(),
+        label: "Submit Claim".to_string(),
+        status: "done".to_string(),
+        metrics: claim_metrics.clone(),
+    });
+
+    // Audit / Replay step
+    if is_l2 {
+        let mut m = HashMap::new();
+        m.insert(
+            "Replay time (ms)".to_string(),
+            resolution.replay_time_ms.to_string(),
+        );
+        m.insert(
+            "Divergence".to_string(),
+            if resolution.divergence.detected {
+                "Detected".to_string()
+            } else {
+                "None".to_string()
+            },
+        );
+        m.insert("Reason".to_string(), resolution.divergence.reason.clone());
+        m.insert(
+            "Trace fetch".to_string(),
+            resolution.divergence.trace_fetch_status.clone(),
+        );
+        if let Some(index) = resolution.divergence.first_divergence_index {
+            m.insert("First divergence index".to_string(), index.to_string());
+        }
+        steps.push(StepOutput {
+            key: "audit".to_string(),
+            label: "Audit".to_string(),
+            status: "done".to_string(),
+            metrics: m,
+        });
+
+        // Await finalization step
+        let mut await_metrics = HashMap::new();
+        await_metrics.insert(
+            "Challenge deadline".to_string(),
+            resolution.challenge_deadline.to_string(),
+        );
+        await_metrics.insert(
+            "Challenge period (s)".to_string(),
+            DEFAULT_CHALLENGE_PERIOD.to_string(),
+        );
+        await_metrics.insert(
+            "Status".to_string(),
+            if resolution.divergence.detected {
+                "Challenged before deadline".to_string()
+            } else {
+                "Deadline passed — settling".to_string()
+            },
+        );
+        steps.push(StepOutput {
+            key: "await-finalization".to_string(),
+            label: "Await Finalization".to_string(),
+            status: "done".to_string(),
+            metrics: await_metrics,
+        });
+    } else {
+        let mut m = HashMap::new();
+        m.insert(
+            "Replay time (ms)".to_string(),
+            resolution.replay_time_ms.to_string(),
+        );
+        m.insert(
+            "Divergence".to_string(),
+            if resolution.divergence.detected {
+                "Detected"
+            } else {
+                "None"
+            }
+            .to_string(),
+        );
+        m.insert("Reason".to_string(), resolution.divergence.reason.clone());
+        m.insert(
+            "Trace fetch".to_string(),
+            resolution.divergence.trace_fetch_status.clone(),
+        );
+        if let Some(index) = resolution.divergence.first_divergence_index {
+            m.insert("First divergence index".to_string(), index.to_string());
+        }
+        steps.push(StepOutput {
+            key: "replay".to_string(),
+            label: "Replay".to_string(),
+            status: "done".to_string(),
+            metrics: m,
+        });
+    }
+
+    // Outcome step
+    steps.push(StepOutput {
+        key: "outcome".to_string(),
+        label: "Outcome".to_string(),
+        status: outcome_status.to_string(),
+        metrics: outcome_metrics.clone(),
+    });
+
+    steps
+}
+
+/// Build the aggregate summary for a run.
+fn build_summary(
+    raster_result: &Option<raster_workload::RasterWorkloadResult>,
+    da_publication: &Option<shared::da::TracePublication>,
+    claim_result: &shared::claimer::ClaimResult,
+    resolution: &shared::challenger::AuditResolution,
+    outcome_status: &str,
+    is_l2: bool,
+    total_time_ms: Option<u64>,
+) -> SummaryOutput {
+    SummaryOutput {
+        exec_time_ms: raster_result.as_ref().map(|r| r.exec_time_ms),
+        trace_size_bytes: raster_result.as_ref().map(|r| r.trace_size_bytes),
+        da_gas: da_publication
+            .as_ref()
+            .map(|publication| publication.gas_used),
+        claim_gas: claim_result.gas_used,
+        replay_time_ms: Some(resolution.replay_time_ms),
+        fraud_proof_time_ms: None,
+        fraud_proof_gas: None,
+        proof_status: resolution.proof_status.clone(),
+        divergence: Some(DivergenceSummary {
+            detected: resolution.divergence.detected,
+            reason: resolution.divergence.reason.clone(),
+            first_divergence_index: resolution.divergence.first_divergence_index,
+            trace_fetch_status: resolution.divergence.trace_fetch_status.clone(),
+            trace_tx_hash: resolution.divergence.trace_tx_hash.clone(),
+            trace_payload_bytes: resolution.divergence.trace_payload_bytes,
+        }),
+        total_time_ms,
+        outcome: outcome_status.to_string(),
+
+        // L2 claim metadata
+        prev_output_root: if is_l2 {
+            Some(claim_result.prev_output_root.clone())
+        } else {
+            None
+        },
+        next_output_root: if is_l2 {
+            Some(claim_result.next_output_root.clone())
+        } else {
+            None
+        },
+        start_block: if is_l2 {
+            Some(claim_result.start_block)
+        } else {
+            None
+        },
+        end_block: if is_l2 {
+            Some(claim_result.end_block)
+        } else {
+            None
+        },
+        batch_hash: if is_l2 {
+            Some(claim_result.batch_hash.clone())
+        } else {
+            None
+        },
+        input_blob_versioned_hash: if is_l2 {
+            Some(claim_result.input_blob_versioned_hash.clone())
+        } else {
+            None
+        },
+        bond_amount: if is_l2 {
+            Some(claim_result.bond_amount.clone())
+        } else {
+            None
+        },
+        challenge_deadline: if is_l2 {
+            Some(claim_result.challenge_deadline)
+        } else {
+            None
+        },
+        challenge_period_seconds: if is_l2 {
+            Some(DEFAULT_CHALLENGE_PERIOD)
+        } else {
+            None
+        },
+    }
 }
 
 /// `GET /api/runs` — list all past runs, newest first.

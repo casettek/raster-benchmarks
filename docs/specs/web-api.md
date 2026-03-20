@@ -37,7 +37,7 @@ Uses GET with query parameters so the browser `EventSource` API can connect dire
 
 | Param      | Type   | Default     | Description |
 |------------|--------|-------------|-------------|
-| `workload` | string | `"stub"`    | Workload name (`"raster-hello"` enables real exec + trace + DA publication) |
+| `workload` | string | `"l2-kona-poc"` | Workload name (`"raster-hello"` or `"l2-kona-poc"`) |
 | `scenario` | string | `"honest"`  | `"honest"` or `"dishonest"` |
 
 **Response:** `text/event-stream`
@@ -53,7 +53,10 @@ event: step
 data: {"key":"<step_key>","label":"<label>","status":"<status>","metrics":{...}}
 ```
 
-Step keys are emitted in order: `exec`, `trace`, `da`, `claim`, `replay`, `outcome`.
+Step keys depend on the workload (see `docs/specs/run-schema.md` for full lifecycle definitions):
+
+- **Legacy** (`raster-hello`): `exec`, `trace`, `da`, `claim`, `replay`, `outcome`
+- **L2** (`l2-kona-poc`): `prepare`, `exec`, `da`, `claim`, `audit`, `await-finalization`, `outcome`
 
 Status values: `"pending"`, `"running"`, `"done"`, `"settled"`, `"slashed"`.
 
@@ -75,26 +78,38 @@ event: error
 data: {"message":"<error text>"}
 ```
 
-#### Step emission sequence
+#### Step emission sequence — legacy lifecycle (`raster-hello`)
 
 1. `exec`, `trace`, `da` are emitted first as `status: "pending"` placeholders.
-   - For `workload=raster-hello`, each step is promoted to `"running"` when active, then re-emitted as `status: "done"` with real metrics.
-   - For `workload=stub`, they remain `"pending"`.
+   - Each step is promoted to `"running"` when active, then re-emitted as `status: "done"` with real metrics.
 2. `claim` emitted as `"running"`, then re-emitted as `"done"` with metrics after `submitClaim` tx.
 3. `replay` emitted as `"running"`, then re-emitted as `"done"` after rerun-first challenger audit.
 4. `outcome` emitted as `"settled"` or `"slashed"` with final metrics.
 5. `done` event with full `RunOutput`.
 
-`claim` metrics include trace pointer fields (`Trace tx hash`, `Trace payload bytes`, `Trace codec id`).
-For `stub` paths these values are zeroed (`0x00..00`, `0`, `0`).
+#### Step emission sequence — L2 lifecycle (`l2-kona-poc`)
 
-Replay behavior is rerun-first:
+1. `prepare`, `exec`, `da` emitted first as `status: "pending"` placeholders.
+2. `prepare` promoted to `"running"`, then `"done"` with batch metadata (fixture name, batch hash, block range).
+3. `exec` promoted to `"running"`, then `"done"` with execution metrics. No separate `trace` step — trace artifacts are folded into exec.
+4. `da` promoted to `"running"`, then `"done"` with DA publication metrics.
+5. `claim` emitted as `"running"`, then `"done"` with full L2 claim metadata (prevOutputRoot, nextOutputRoot, startBlock, endBlock, batchHash, bond amount, challenge deadline, trace pointer).
+6. `audit` emitted as `"running"`, then `"done"` with local replay results (replay time, divergence status, trace fetch status).
+7. `await-finalization` emitted as `"running"` with challenge deadline and period metrics, then `"done"` with terminal status text.
+8. `outcome` emitted as `"settled"` or `"slashed"` with final metrics.
+9. `done` event with full `RunOutput` including L2 summary metadata.
+
+#### Claim and replay behavior
+
+`claim` metrics include trace pointer fields (`Trace tx hash`, `Trace payload bytes`, `Trace codec id`) and full L2 claim metadata for `l2-kona-poc` runs.
+
+Replay/audit behavior is rerun-first:
 
 - Challenger fetches claim metadata, replays locally from claim workload inputs, and compares local roots against claim roots.
 - If replay matches, no trace payload fetch is attempted and outcome resolves via settlement.
 - If replay diverges, challenger conditionally fetches and decodes the trace payload from the trace publication tx pointer, then resolves via challenge/slash in dishonest simulation mode.
 
-Replay and outcome metrics now include divergence context (`Reason`, `Trace fetch`, optional `First divergence index`) and proof status (`Proof status = not-generated` until fraud-proof generation is implemented).
+Replay, audit, and outcome metrics include divergence context (`Reason`, `Trace fetch`, optional `First divergence index`) and proof status (`Proof status = not-generated` until fraud-proof generation is implemented).
 
 ### `GET /api/runs` — List all runs
 
@@ -113,7 +128,7 @@ Returns `[]` if no run files exist.
 
 ### `GET /api/runs/:id` — Get a single run
 
-`:id` matches the run filename stem (e.g., `2026-03-06T12-00-00-stub-honest`).
+`:id` matches the run filename stem (e.g., `2026-03-06T12-00-00-l2-kona-poc-honest`).
 
 **Response:**
 - `200 OK` with the `RunOutput` JSON if found.
@@ -133,4 +148,6 @@ Same convention as the CLI runner (`apps/runner`).
 
 All files under `web/` are served at the root path. API routes take precedence over static files.
 
-The scenario runner UI at `/scenario-runner/` auto-detects whether it's served over HTTP (live mode with SSE) or opened from the filesystem (stub mode with `setTimeout` animation).
+The scenario runner UI at `/scenario-runner/` requires the web server to be running (live mode with SSE). When opened from the filesystem, it displays past runs from localStorage but cannot execute new runs.
+
+For L2 runs (`l2-kona-poc`), the UI renders the expanded lifecycle with `Prepare Batch`, `Audit`, and `Await Finalization` steps. The `Await Finalization` step shows a live countdown timer derived from the challenge deadline and challenge period metrics emitted during the `await-finalization` running state.

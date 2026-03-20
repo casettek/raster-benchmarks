@@ -17,8 +17,8 @@ pub struct L2ClaimInput {
     pub batch_hash: [u8; 32],
 }
 
-/// Hardcoded stub L2 claim fields for non-L2 workloads (raster-hello, stub).
-pub fn stub_l2_claim_input() -> L2ClaimInput {
+/// Default L2 claim fields for non-L2 workloads (e.g., raster-hello).
+pub fn default_l2_claim_input() -> L2ClaimInput {
     L2ClaimInput {
         prev_output_root: [0xaa; 32],
         next_output_root: [0xbb; 32],

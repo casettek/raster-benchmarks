@@ -1,0 +1,128 @@
+{
+  "id": "fixture-l2-kona-poc-honest",
+  "workload": "l2-kona-poc",
+  "scenario": "honest",
+  "timestamp": "2026-03-20T12:00:00.000000000+00:00",
+  "raster_pin": {
+    "revision": "e218bee19d0caa12b3efba91e9028f49b95e0806"
+  },
+  "steps": [
+    {
+      "key": "prepare",
+      "label": "Prepare Batch",
+      "status": "done",
+      "metrics": {
+        "Fixture": "l2-poc-synth-fixture.json",
+        "Batch hash": "0xb9ef076572948183c38d75a6b8966236c1030c83c0e6ab50b813266de50be229",
+        "Block range": "26207960 → 26207960"
+      }
+    },
+    {
+      "key": "exec",
+      "label": "Execute Program",
+      "status": "done",
+      "metrics": {
+        "Workload": "l2-kona-poc",
+        "Exec time (ms)": "4200",
+        "Trace steps": "10"
+      }
+    },
+    {
+      "key": "da",
+      "label": "Publish to DA",
+      "status": "done",
+      "metrics": {
+        "Blob tx hash": "0xda01da01da01da01da01da01da01da01da01da01da01da01da01da01da01da01",
+        "Payload bytes": "5120",
+        "Codec id": "1",
+        "Gas used": "162400",
+        "Payload hash": "0xaaff00bbaaff00bbaaff00bbaaff00bbaaff00bbaaff00bbaaff00bbaaff00bb"
+      }
+    },
+    {
+      "key": "claim",
+      "label": "Submit Claim",
+      "status": "done",
+      "metrics": {
+        "Claim ID": "1",
+        "Tx hash": "0xcl01cl01cl01cl01cl01cl01cl01cl01cl01cl01cl01cl01cl01cl01cl01cl01",
+        "Gas used": "168200",
+        "prevOutputRoot": "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "nextOutputRoot": "0xe13f82b2b6e02d94a7b1a2a5a8ca21da71c7d14c1e3e35d97687e7bf86425b17",
+        "startBlock": "26207960",
+        "endBlock": "26207960",
+        "batchHash": "0xb9ef076572948183c38d75a6b8966236c1030c83c0e6ab50b813266de50be229",
+        "Bond amount": "1000000000000000000",
+        "Challenge deadline": "1742486520",
+        "Trace tx hash": "0xda01da01da01da01da01da01da01da01da01da01da01da01da01da01da01da01",
+        "Trace payload bytes": "5120",
+        "Trace codec id": "1"
+      }
+    },
+    {
+      "key": "audit",
+      "label": "Audit",
+      "status": "done",
+      "metrics": {
+        "Replay time (ms)": "12",
+        "Divergence": "None",
+        "Reason": "Local replay matched claimed nextOutputRoot",
+        "Trace fetch": "skipped"
+      }
+    },
+    {
+      "key": "await-finalization",
+      "label": "Await Finalization",
+      "status": "done",
+      "metrics": {
+        "Challenge deadline": "1742486520",
+        "Challenge period (s)": "120",
+        "Status": "Deadline passed — settling"
+      }
+    },
+    {
+      "key": "outcome",
+      "label": "Outcome",
+      "status": "settled",
+      "metrics": {
+        "Tx hash": "0xst01st01st01st01st01st01st01st01st01st01st01st01st01st01st01st01",
+        "Gas used": "28100",
+        "Final state": "Settled",
+        "Proof status": "not-generated",
+        "Claimer nextOutputRoot": "0xe13f82b2b6e02d94a7b1a2a5a8ca21da71c7d14c1e3e35d97687e7bf86425b17",
+        "Observed nextOutputRoot": "0xe13f82b2b6e02d94a7b1a2a5a8ca21da71c7d14c1e3e35d97687e7bf86425b17",
+        "Trace fetch": "skipped",
+        "Challenge deadline": "1742486520"
+      }
+    }
+  ],
+  "summary": {
+    "exec_time_ms": 4200,
+    "trace_size_bytes": 5120,
+    "da_gas": 162400,
+    "claim_gas": 168200,
+    "replay_time_ms": 12,
+    "fraud_proof_time_ms": null,
+    "fraud_proof_gas": null,
+    "proof_status": "not-generated",
+    "divergence": {
+      "detected": false,
+      "reason": "Local replay matched claimed nextOutputRoot",
+      "first_divergence_index": null,
+      "trace_fetch_status": "skipped",
+      "trace_tx_hash": null,
+      "trace_payload_bytes": null
+    },
+    "total_time_ms": 4850,
+    "outcome": "settled",
+    "prev_output_root": "0x1111111111111111111111111111111111111111111111111111111111111111",
+    "next_output_root": "0xe13f82b2b6e02d94a7b1a2a5a8ca21da71c7d14c1e3e35d97687e7bf86425b17",
+    "start_block": 26207960,
+    "end_block": 26207960,
+    "batch_hash": "0xb9ef076572948183c38d75a6b8966236c1030c83c0e6ab50b813266de50be229",
+    "input_blob_versioned_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "bond_amount": "1000000000000000000",
+    "challenge_deadline": 1742486520,
+    "challenge_period_seconds": 120
+  }
+}

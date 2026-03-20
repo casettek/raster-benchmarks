@@ -185,26 +185,42 @@ pub async fn advance_past_deadline(provider: &AnvilProvider, deadline: u64) -> R
     Ok(())
 }
 
-/// Resolve a claim via local replay and either settle or challenge.
+/// Result of the audit phase (replay + conditional trace fetch) before settlement.
 ///
-/// In honest mode, the expected `nextOutputRoot` matches the claimer's; in
-/// dishonest simulation mode, a deliberately wrong root triggers challenge.
+/// Separating audit from settlement allows callers (runner, web-server) to emit
+/// distinct `audit` and `await-finalization` step updates with intermediate state.
+#[derive(Debug, Clone, Serialize)]
+pub struct AuditResult {
+    pub replay_time_ms: u64,
+    pub divergence: DivergenceReport,
+    pub claimer_next_output_root: String,
+    pub challenge_deadline: u64,
+    pub challenge_period: u64,
+}
+
+/// Perform the audit phase: local replay comparison and conditional trace fetch.
 ///
-/// For the honest path, the chain is advanced past the challenge deadline
-/// before calling `settleClaim`.
-pub async fn resolve_claim_with_replay(
+/// Returns an `AuditResult` that the caller uses to decide whether to settle
+/// or challenge. Does not mutate chain state.
+pub async fn audit_claim(
     provider: &AnvilProvider,
     contract_address: Address,
     claim_id: U256,
     mode: ReplayMode,
     l2_input: &L2ClaimInput,
-) -> Result<AuditResolution> {
+) -> Result<AuditResult> {
     let contract = IClaimVerifier::new(contract_address, provider);
     let claim = contract
         .getClaim(claim_id)
         .call()
         .await
         .wrap_err("failed to fetch claim before replay")?;
+
+    let challenge_period = contract
+        .challengePeriod()
+        .call()
+        .await
+        .wrap_err("failed to read challengePeriod")?;
 
     let replay_start = Instant::now();
     let observed_next_output_root = replay_next_output_root(mode, l2_input)?;
@@ -251,7 +267,29 @@ pub async fn resolve_claim_with_replay(
         }
     }
 
-    if mismatch {
+    Ok(AuditResult {
+        replay_time_ms,
+        divergence,
+        claimer_next_output_root: format!("0x{}", alloy::hex::encode(claim.nextOutputRoot)),
+        challenge_deadline: claim.challengeDeadline,
+        challenge_period,
+    })
+}
+
+/// Finalize or challenge a claim based on a prior `AuditResult`.
+///
+/// If audit found no divergence (honest), advances chain time past deadline
+/// and settles. If divergence was detected, challenges with the observed root.
+pub async fn finalize_claim(
+    provider: &AnvilProvider,
+    contract_address: Address,
+    claim_id: U256,
+    audit: &AuditResult,
+    l2_input: &L2ClaimInput,
+    mode: ReplayMode,
+) -> Result<AuditResolution> {
+    if audit.divergence.detected {
+        let observed_next_output_root = replay_next_output_root(mode, l2_input)?;
         let challenge = challenge_claim_with_observed(
             provider,
             contract_address,
@@ -261,36 +299,55 @@ pub async fn resolve_claim_with_replay(
         .await?;
 
         Ok(AuditResolution {
-            replay_time_ms,
-            divergence,
+            replay_time_ms: audit.replay_time_ms,
+            divergence: audit.divergence.clone(),
             proof_status: "not-generated".to_string(),
             final_state: challenge.final_state,
             tx_hash: challenge.tx_hash,
             gas_used: challenge.gas_used,
             claim_id,
             claimer_next_output_root: challenge.claimer_next_output_root,
-            challenge_deadline: claim.challengeDeadline,
+            challenge_deadline: audit.challenge_deadline,
         })
     } else {
         // Advance chain time past the challenge deadline before settling
-        advance_past_deadline(provider, claim.challengeDeadline).await?;
+        advance_past_deadline(provider, audit.challenge_deadline).await?;
 
         let settled = settle_claim(provider, contract_address, claim_id).await?;
         Ok(AuditResolution {
-            replay_time_ms,
-            divergence,
+            replay_time_ms: audit.replay_time_ms,
+            divergence: audit.divergence.clone(),
             proof_status: "not-generated".to_string(),
             final_state: settled.final_state,
             tx_hash: settled.tx_hash,
             gas_used: settled.gas_used,
             claim_id,
-            claimer_next_output_root: format!(
-                "0x{}",
-                alloy::hex::encode(claim.nextOutputRoot)
-            ),
-            challenge_deadline: claim.challengeDeadline,
+            claimer_next_output_root: audit.claimer_next_output_root.clone(),
+            challenge_deadline: audit.challenge_deadline,
         })
     }
+}
+
+/// Resolve a claim via local replay and either settle or challenge.
+///
+/// In honest mode, the expected `nextOutputRoot` matches the claimer's; in
+/// dishonest simulation mode, a deliberately wrong root triggers challenge.
+///
+/// For the honest path, the chain is advanced past the challenge deadline
+/// before calling `settleClaim`.
+///
+/// This is the combined convenience function that calls `audit_claim` +
+/// `finalize_claim` in sequence. Callers needing intermediate step events
+/// should call the two-phase API instead.
+pub async fn resolve_claim_with_replay(
+    provider: &AnvilProvider,
+    contract_address: Address,
+    claim_id: U256,
+    mode: ReplayMode,
+    l2_input: &L2ClaimInput,
+) -> Result<AuditResolution> {
+    let audit = audit_claim(provider, contract_address, claim_id, mode, l2_input).await?;
+    finalize_claim(provider, contract_address, claim_id, &audit, l2_input, mode).await
 }
 
 /// Produce the expected `nextOutputRoot` for a given replay mode.
