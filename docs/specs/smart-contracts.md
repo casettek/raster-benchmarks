@@ -79,7 +79,8 @@ The `Claim` struct stores the full canonical L2 transition claim:
 ```
 
 - **Submit**: claimer posts bond (>= `minBond`), contract records claim with
-  `challengeDeadline = block.timestamp + challengePeriod`.
+  `challengeDeadline = block.timestamp + challengePeriod`. Claims without a
+  trace pointer are rejected.
 - **Challenge**: anyone can challenge before `challengeDeadline` by providing
   a divergent `observedNextOutputRoot`. Claim transitions to `Slashed`, bond
   transferred to challenger. No challenger stake required in v1.

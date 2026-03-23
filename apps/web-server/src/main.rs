@@ -573,7 +573,9 @@ async fn run_pipeline(
         &state.provider,
         contract_address,
         &l2_input,
-        da_publication.as_ref(),
+        da_publication
+            .as_ref()
+            .expect("trace publication is required before claim submission"),
         DEFAULT_MIN_BOND,
     )
     .await

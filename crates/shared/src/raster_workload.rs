@@ -6,9 +6,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use eyre::{Context, Result, eyre};
 use raster_core::postcard;
-use raster_core::trace::{FnCallRecord, StepRecord};
+use raster_core::trace::StepRecord;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 const TRACE_COMMITMENT_SCHEME: &str = "raster.trace_record.sha256.postcard.v1";
@@ -86,10 +85,10 @@ pub fn run(workload: &str, run_id: &str) -> Result<Option<RasterWorkloadResult>>
 
     let stdout =
         String::from_utf8(output.stdout).wrap_err("workload stdout was not valid UTF-8")?;
-    let trace_records: Vec<Value> = stdout
+    let trace_records: Vec<StepRecord> = stdout
         .lines()
         .filter_map(|line| line.strip_prefix("[trace]"))
-        .map(serde_json::from_str::<Value>)
+        .map(serde_json::from_str::<StepRecord>)
         .collect::<serde_json::Result<_>>()
         .wrap_err("failed to parse workload trace records")?;
 
@@ -168,11 +167,6 @@ fn workload_input_json(spec: &WorkloadSpec) -> Result<String> {
 }
 
 fn ensure_workload_binary(spec: &WorkloadSpec) -> Result<()> {
-    let bin_abs = Path::new(spec.run_dir).join(spec.bin_path);
-    if bin_abs.exists() {
-        return Ok(());
-    }
-
     let build_output = Command::new("cargo")
         .current_dir(spec.run_dir)
         .env("RISC0_SKIP_BUILD", "1")
@@ -186,6 +180,14 @@ fn ensure_workload_binary(spec: &WorkloadSpec) -> Result<()> {
             "Raster workload build failed with status {}: {}",
             build_output.status,
             stderr.trim()
+        ));
+    }
+
+    let bin_abs = Path::new(spec.run_dir).join(spec.bin_path);
+    if !bin_abs.exists() {
+        return Err(eyre!(
+            "Raster workload build completed but binary was not found at {}",
+            bin_abs.display()
         ));
     }
 
@@ -314,13 +316,14 @@ pub fn trace_step_metrics(result: &RasterWorkloadResult) -> HashMap<String, Stri
     ])
 }
 
-fn build_trace_commitment_artifact(records: &[Value]) -> Result<TraceCommitmentArtifact> {
+fn build_trace_commitment_artifact(records: &[StepRecord]) -> Result<TraceCommitmentArtifact> {
     let mut item_commitments = Vec::with_capacity(records.len());
     let mut aggregate_hasher = Sha256::new();
     aggregate_hasher.update(TRACE_AGGREGATE_DOMAIN_SEPARATOR);
 
     for record in records {
-        let encoded = trace_record_commitment_bytes(record)?;
+        let encoded = postcard::to_allocvec(record)
+            .wrap_err("failed to postcard-encode StepRecord trace item")?;
         let item_commitment = Sha256::digest(&encoded);
         aggregate_hasher.update(item_commitment);
         item_commitments.push(format!("0x{}", alloy::hex::encode(item_commitment)));
@@ -357,22 +360,6 @@ fn first_divergence_index(
     None
 }
 
-fn trace_record_commitment_bytes(record: &Value) -> Result<Vec<u8>> {
-    if let Ok(step_record) = serde_json::from_value::<StepRecord>(record.clone()) {
-        return postcard::to_allocvec(&step_record)
-            .wrap_err("failed to postcard-encode StepRecord trace item");
-    }
-
-    if let Ok(fn_call_record) = serde_json::from_value::<FnCallRecord>(record.clone()) {
-        return postcard::to_allocvec(&fn_call_record)
-            .wrap_err("failed to postcard-encode FnCallRecord trace item");
-    }
-
-    Err(eyre!(
-        "unsupported Raster trace item shape for commitment generation"
-    ))
-}
-
 fn raster_revision() -> String {
     let output = Command::new("git")
         .args(["-C", "../raster", "rev-parse", "HEAD"])
@@ -406,28 +393,34 @@ enum WorkloadInput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use raster_core::trace::FnInputParam;
+    use raster_core::cfs::CfsCoordinates;
+    use raster_core::trace::{FnCallRecord, FnInputParam, TileExecRecord};
 
-    fn sample_record(name: &str, output: &[u8]) -> FnCallRecord {
-        FnCallRecord {
-            fn_name: name.to_string(),
-            desc: None,
-            inputs: vec![FnInputParam {
-                name: "value".to_string(),
-                ty: "u64".to_string(),
-            }],
-            input_data: vec![1, 2, 3],
-            output_type: Some("u64".to_string()),
-            output_data: output.to_vec(),
-        }
+    fn sample_record(name: &str, output: &[u8]) -> StepRecord {
+        StepRecord::TileExec(TileExecRecord {
+            exec_index: 1,
+            sequence_id: "sample-seq".to_string(),
+            coordinates: CfsCoordinates(vec![0]),
+            intra_sequence_index: 0,
+            fn_call_record: FnCallRecord {
+                fn_name: name.to_string(),
+                desc: None,
+                inputs: vec![FnInputParam {
+                    name: "value".to_string(),
+                    ty: "u64".to_string(),
+                }],
+                input_data: vec![1, 2, 3],
+                output_type: Some("u64".to_string()),
+                output_data: output.to_vec(),
+            },
+        })
     }
 
     #[test]
     fn trace_commitment_artifact_is_deterministic() {
         let records = vec![
-            serde_json::to_value(sample_record("first", &[0x01])).expect("serialize first record"),
-            serde_json::to_value(sample_record("second", &[0x02]))
-                .expect("serialize second record"),
+            sample_record("first", &[0x01]),
+            sample_record("second", &[0x02]),
         ];
 
         let first = build_trace_commitment_artifact(&records).expect("build commitment");

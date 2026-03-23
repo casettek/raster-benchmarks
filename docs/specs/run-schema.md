@@ -109,22 +109,22 @@ Note: the L2 lifecycle does not include a separate `trace` step — trace artifa
 - `batchHash` — keccak256 commitment over tracked tx bytes (hex)
 - `Bond amount` — claimer bond in wei (decimal string)
 - `Challenge deadline` — unix timestamp after which the claim can settle
-- `Trace tx hash` — pointer to the DA publication tx hash (`0x00..00` when unset)
-- `Trace payload bytes` — pointer payload byte size (`0` when unset)
-- `Trace codec id` — pointer codec id (`0` when unset)
+- `Trace tx hash` — pointer to the DA publication tx hash
+- `Trace payload bytes` — pointer payload byte size
+- `Trace codec id` — pointer codec id
 
 **`replay` metrics (legacy lifecycle):**
 - `Replay time (ms)` — replay duration in milliseconds
 - `Divergence` — `"None"` (honest) or `"Detected"` (dishonest)
 - `Reason` — deterministic replay/audit reason string
-- `Trace fetch` — trace-commitment audit status (`fetched` or `missing-pointer`)
+- `Trace fetch` — trace-commitment audit status (`fetched`)
 - `First divergence index` — optional first mismatching commitment item index when available
 
 **`audit` metrics (L2 lifecycle):**
 - `Replay time (ms)` — local replay duration in milliseconds
 - `Divergence` — `"None"` (honest) or `"Detected"` (dishonest)
 - `Reason` — deterministic replay/audit reason string
-- `Trace fetch` — trace-commitment audit status (`fetched` or `missing-pointer`)
+- `Trace fetch` — trace-commitment audit status (`fetched`)
 - `First divergence index` — optional first mismatching commitment item index when available
 
 **`await-finalization` metrics (L2 lifecycle):**
@@ -184,7 +184,7 @@ Nullable fields are serialized as JSON `null` when not applicable. L2 claim meta
 | `detected` | `bool` | no | Whether replay output diverged from claimed output |
 | `reason` | `string` | no | Human-readable replay/audit decision reason |
 | `first_divergence_index` | `u64` | yes | First divergence index when trace localization is available |
-| `trace_fetch_status` | `string` | no | `"fetched"` or `"missing-pointer"` |
+| `trace_fetch_status` | `string` | no | `"fetched"` |
 | `trace_tx_hash` | `string` | yes | Pointer hash used for conditional trace fetch |
 | `trace_payload_bytes` | `u32` | yes | Pointer payload size validated during trace fetch |
 
