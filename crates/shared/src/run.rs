@@ -48,6 +48,7 @@ pub struct StepOutput {
 pub struct SummaryOutput {
     pub exec_time_ms: Option<u64>,
     pub trace_size_bytes: Option<u64>,
+    pub trace_commitment_size_bytes: Option<u64>,
     pub da_gas: Option<u64>,
     pub claim_gas: u64,
     pub replay_time_ms: Option<u64>,

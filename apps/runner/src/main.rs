@@ -69,12 +69,12 @@ async fn main() -> Result<()> {
 
     // 5. DA publication — publish trace payload for real workloads
     let da_publication = if let Some(result) = &raster_workload_result {
-        let trace_payload = raster_workload::load_trace_payload(result)?;
+        let trace_payload = raster_workload::load_trace_commitment_payload(result)?;
         let publication = shared::da::publish_trace(
             &provider,
             contract_address,
             trace_payload,
-            shared::da::TRACE_CODEC_NDJSON_V1,
+            shared::da::TRACE_CODEC_COMMITMENT_JSON_V1,
         )
         .await?;
         shared::da::persist_trace_index(&run_id, &publication)?;
@@ -114,6 +114,7 @@ async fn main() -> Result<()> {
             &provider,
             contract_address,
             claim_result.claim_id,
+            &cli.workload,
             replay_mode,
             &l2_input,
         )
@@ -136,6 +137,7 @@ async fn main() -> Result<()> {
             contract_address,
             claim_result.claim_id,
             &audit,
+            &cli.workload,
             &l2_input,
             replay_mode,
         )
@@ -148,6 +150,7 @@ async fn main() -> Result<()> {
             &provider,
             contract_address,
             claim_result.claim_id,
+            &cli.workload,
             replay_mode,
             &l2_input,
         )
@@ -164,17 +167,18 @@ async fn main() -> Result<()> {
     eprintln!("Outcome: {outcome_status} (gas={outcome_gas})");
 
     // 8. Assemble RunOutput
-    let (exec_time_ms, trace_size_bytes, raster_pin) =
+    let (exec_time_ms, trace_size_bytes, trace_commitment_size_bytes, raster_pin) =
         if let Some(result) = &raster_workload_result {
             (
                 Some(result.exec_time_ms),
                 Some(result.trace_size_bytes),
+                Some(result.trace_commitment_size_bytes),
                 RasterPin {
                     revision: result.raster_revision.clone(),
                 },
             )
         } else {
-            (None, None, RasterPin::default())
+            (None, None, None, RasterPin::default())
         };
 
     let steps = build_steps(
@@ -191,6 +195,7 @@ async fn main() -> Result<()> {
     let summary = build_summary(
         exec_time_ms,
         trace_size_bytes,
+        trace_commitment_size_bytes,
         &da_publication,
         &claim_result,
         &resolution,
@@ -543,6 +548,7 @@ fn build_claim_metrics(claim_result: &shared::claimer::ClaimResult) -> HashMap<S
 fn build_summary(
     exec_time_ms: Option<u64>,
     trace_size_bytes: Option<u64>,
+    trace_commitment_size_bytes: Option<u64>,
     da_publication: &Option<shared::da::TracePublication>,
     claim_result: &shared::claimer::ClaimResult,
     resolution: &shared::challenger::AuditResolution,
@@ -553,6 +559,7 @@ fn build_summary(
     SummaryOutput {
         exec_time_ms,
         trace_size_bytes,
+        trace_commitment_size_bytes,
         da_gas: da_publication
             .as_ref()
             .map(|publication| publication.gas_used),

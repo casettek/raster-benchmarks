@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use alloy::primitives::{Address, B256, FixedBytes, U256};
 use alloy::providers::Provider;
-use eyre::{Result, WrapErr};
+use eyre::{Result, WrapErr, eyre};
 use serde::Serialize;
 
 use crate::anvil::AnvilProvider;
@@ -206,6 +206,7 @@ pub async fn audit_claim(
     provider: &AnvilProvider,
     contract_address: Address,
     claim_id: U256,
+    workload: &str,
     mode: ReplayMode,
     l2_input: &L2ClaimInput,
 ) -> Result<AuditResult> {
@@ -224,13 +225,15 @@ pub async fn audit_claim(
 
     let replay_start = Instant::now();
     let observed_next_output_root = replay_next_output_root(mode, l2_input)?;
+    let local_trace_commitment =
+        crate::raster_workload::rerun_trace_commitment(workload, &claim_id.to_string())?;
     let replay_time_ms = replay_start.elapsed().as_millis().min(u64::MAX as u128) as u64;
 
-    let mismatch = claim.nextOutputRoot != observed_next_output_root;
+    let output_root_mismatch = claim.nextOutputRoot != observed_next_output_root;
 
     let mut divergence = DivergenceReport {
-        detected: mismatch,
-        reason: if mismatch {
+        detected: output_root_mismatch,
+        reason: if output_root_mismatch {
             "Local replay nextOutputRoot differs from claimed nextOutputRoot".to_string()
         } else {
             "Local replay matched claimed nextOutputRoot".to_string()
@@ -242,29 +245,48 @@ pub async fn audit_claim(
         observed_next_output_root: format!("0x{}", alloy::hex::encode(observed_next_output_root)),
     };
 
-    if mismatch {
-        let trace_hash = B256::from(claim.traceTxHash);
-        if trace_hash == B256::ZERO {
-            divergence.trace_fetch_status = "missing-pointer".to_string();
-            divergence.reason =
-                "Local replay mismatch and claim has no trace pointer for audit".to_string();
+    let trace_hash = B256::from(claim.traceTxHash);
+    if trace_hash == B256::ZERO {
+        divergence.trace_fetch_status = "missing-pointer".to_string();
+        divergence.reason = if output_root_mismatch {
+            "Local replay nextOutputRoot differs from claimed nextOutputRoot and claim has no trace pointer for commitment audit".to_string()
         } else {
-            let fetched_payload = crate::da::fetch_trace_payload_from_tx(
-                provider,
-                contract_address,
-                trace_hash,
-                claim.tracePayloadBytes,
-                claim.traceCodecId,
-            )
-            .await?;
+            "Local replay matched claimed nextOutputRoot but claim has no trace pointer for commitment audit".to_string()
+        };
+    } else {
+        let fetched_payload = crate::da::fetch_trace_payload_from_tx(
+            provider,
+            contract_address,
+            trace_hash,
+            claim.tracePayloadBytes,
+            claim.traceCodecId,
+        )
+        .await?;
+        let published_trace_commitment =
+            crate::raster_workload::decode_trace_commitment_payload(&fetched_payload)?;
+        let commitment_comparison = crate::raster_workload::compare_trace_commitments(
+            &published_trace_commitment,
+            &local_trace_commitment,
+        );
+        let commitment_mismatch = !commitment_comparison.matches;
 
-            divergence.trace_fetch_status = "fetched".to_string();
-            divergence.trace_tx_hash = Some(format!("0x{}", alloy::hex::encode(trace_hash)));
-            divergence.trace_payload_bytes = Some(claim.tracePayloadBytes);
-            if !fetched_payload.is_empty() {
-                divergence.first_divergence_index = Some(0);
+        divergence.detected = output_root_mismatch || commitment_mismatch;
+        divergence.trace_fetch_status = "fetched".to_string();
+        divergence.trace_tx_hash = Some(format!("0x{}", alloy::hex::encode(trace_hash)));
+        divergence.trace_payload_bytes = Some(claim.tracePayloadBytes);
+        divergence.first_divergence_index = commitment_comparison.first_divergence_index;
+        divergence.reason = match (output_root_mismatch, commitment_mismatch) {
+            (true, true) => format!(
+                "Local replay nextOutputRoot differs from claimed nextOutputRoot and {}",
+                commitment_comparison.reason.to_lowercase()
+            ),
+            (true, false) => "Local replay nextOutputRoot differs from claimed nextOutputRoot while trace commitment matches".to_string(),
+            (false, true) => commitment_comparison.reason,
+            (false, false) => {
+                "Local replay matched claimed nextOutputRoot and published trace commitment"
+                    .to_string()
             }
-        }
+        };
     }
 
     Ok(AuditResult {
@@ -285,10 +307,17 @@ pub async fn finalize_claim(
     contract_address: Address,
     claim_id: U256,
     audit: &AuditResult,
+    workload: &str,
     l2_input: &L2ClaimInput,
     mode: ReplayMode,
 ) -> Result<AuditResolution> {
     if audit.divergence.detected {
+        if audit.claimer_next_output_root == audit.divergence.observed_next_output_root {
+            return Err(eyre!(
+                "trace commitment divergence detected for workload '{}' but contract challenge requires a divergent nextOutputRoot",
+                workload
+            ));
+        }
         let observed_next_output_root = replay_next_output_root(mode, l2_input)?;
         let challenge = challenge_claim_with_observed(
             provider,
@@ -343,11 +372,21 @@ pub async fn resolve_claim_with_replay(
     provider: &AnvilProvider,
     contract_address: Address,
     claim_id: U256,
+    workload: &str,
     mode: ReplayMode,
     l2_input: &L2ClaimInput,
 ) -> Result<AuditResolution> {
-    let audit = audit_claim(provider, contract_address, claim_id, mode, l2_input).await?;
-    finalize_claim(provider, contract_address, claim_id, &audit, l2_input, mode).await
+    let audit = audit_claim(provider, contract_address, claim_id, workload, mode, l2_input).await?;
+    finalize_claim(
+        provider,
+        contract_address,
+        claim_id,
+        &audit,
+        workload,
+        l2_input,
+        mode,
+    )
+    .await
 }
 
 /// Produce the expected `nextOutputRoot` for a given replay mode.

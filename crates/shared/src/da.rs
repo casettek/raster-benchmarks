@@ -10,6 +10,7 @@ use crate::anvil::AnvilProvider;
 use crate::contract::IClaimVerifier;
 
 pub const TRACE_CODEC_NDJSON_V1: u8 = 1;
+pub const TRACE_CODEC_COMMITMENT_JSON_V1: u8 = 2;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TracePublication {

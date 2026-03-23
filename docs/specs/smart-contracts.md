@@ -54,7 +54,7 @@ The `Claim` struct stores the full canonical L2 transition claim:
 | `inputBlobVersionedHash` | `bytes32` | EIP-4844 versioned hash captured at submit time (0 on Anvil) |
 | `traceTxHash` | `bytes32` | DA pointer: hash of trace publication tx |
 | `tracePayloadBytes` | `uint32` | DA pointer: payload byte length |
-| `traceCodecId` | `uint8` | DA pointer: codec discriminator (1 = ndjson v1) |
+| `traceCodecId` | `uint8` | DA pointer: codec discriminator (2 = `trace.commitment.json` v1) |
 | `bondAmount` | `uint256` | ETH bond locked by the claimer |
 | `createdAt` | `uint64` | Block timestamp when claim was created |
 | `challengeDeadline` | `uint64` | Timestamp after which settlement is allowed |
@@ -95,7 +95,7 @@ The `Claim` struct stores the full canonical L2 transition claim:
 
 ### Functions
 
-- `publishTrace(payload, codecId)` publishes trace payload bytes through a
+- `publishTrace(payload, codecId)` publishes trace-commitment payload bytes through a
   dedicated on-chain tx path and emits `TracePublished` with payload
   hash/size metadata.
 - `submitClaim(prevOutputRoot, nextOutputRoot, startBlock, endBlock, batchHash,

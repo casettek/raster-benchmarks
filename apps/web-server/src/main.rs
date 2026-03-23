@@ -482,7 +482,7 @@ async fn run_pipeline(
         )
         .await;
 
-        let trace_payload = match raster_workload::load_trace_payload(result) {
+        let trace_payload = match raster_workload::load_trace_commitment_payload(result) {
             Ok(payload) => payload,
             Err(e) => {
                 let _ = tx
@@ -501,7 +501,7 @@ async fn run_pipeline(
             &state.provider,
             contract_address,
             trace_payload,
-            shared::da::TRACE_CODEC_NDJSON_V1,
+            shared::da::TRACE_CODEC_COMMITMENT_JSON_V1,
         )
         .await
         {
@@ -634,6 +634,7 @@ async fn run_pipeline(
             &state.provider,
             contract_address,
             claim_result.claim_id,
+            &workload,
             replay_mode,
             &l2_input,
         )
@@ -710,6 +711,7 @@ async fn run_pipeline(
             contract_address,
             claim_result.claim_id,
             &audit,
+            &workload,
             &l2_input,
             replay_mode,
         )
@@ -771,6 +773,7 @@ async fn run_pipeline(
             &state.provider,
             contract_address,
             claim_result.claim_id,
+            &workload,
             replay_mode,
             &l2_input,
         )
@@ -1210,6 +1213,9 @@ fn build_summary(
     SummaryOutput {
         exec_time_ms: raster_result.as_ref().map(|r| r.exec_time_ms),
         trace_size_bytes: raster_result.as_ref().map(|r| r.trace_size_bytes),
+        trace_commitment_size_bytes: raster_result
+            .as_ref()
+            .map(|r| r.trace_commitment_size_bytes),
         da_gas: da_publication
             .as_ref()
             .map(|publication| publication.gas_used),

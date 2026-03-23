@@ -92,9 +92,9 @@ data: {"message":"<error text>"}
 1. `prepare`, `exec`, `da` emitted first as `status: "pending"` placeholders.
 2. `prepare` promoted to `"running"`, then `"done"` with batch metadata (fixture name, batch hash, block range).
 3. `exec` promoted to `"running"`, then `"done"` with execution metrics. No separate `trace` step — trace artifacts and trace-commitment metadata are folded into exec.
-4. `da` promoted to `"running"`, then `"done"` with DA publication metrics.
+4. `da` promoted to `"running"`, then `"done"` with DA publication metrics for `trace.commitment.json`.
 5. `claim` emitted as `"running"`, then `"done"` with full L2 claim metadata (prevOutputRoot, nextOutputRoot, startBlock, endBlock, batchHash, bond amount, challenge deadline, trace pointer).
-6. `audit` emitted as `"running"`, then `"done"` with local replay results (replay time, divergence status, trace fetch status).
+6. `audit` emitted as `"running"`, then `"done"` with local replay results (replay time, divergence status, commitment fetch status).
 7. `await-finalization` emitted as `"running"` with challenge deadline and period metrics, then `"done"` with terminal status text.
 8. `outcome` emitted as `"settled"` or `"slashed"` with final metrics.
 9. `done` event with full `RunOutput` including L2 summary metadata.
@@ -105,9 +105,10 @@ data: {"message":"<error text>"}
 
 Replay/audit behavior is rerun-first:
 
-- Challenger fetches claim metadata, replays locally from claim workload inputs, and compares local roots against claim roots.
-- If replay matches, no trace payload fetch is attempted and outcome resolves via settlement.
-- If replay diverges, challenger conditionally fetches and decodes the trace payload from the trace publication tx pointer, then resolves via challenge/slash in dishonest simulation mode.
+- Challenger fetches claim metadata, reruns the workload locally, reconstructs a fresh trace commitment, and compares it against the published commitment artifact from the trace publication tx pointer.
+- Challenger also compares the locally replayed `nextOutputRoot` against the claimed root.
+- If replay and commitment match, outcome resolves via settlement.
+- If divergence is detected, challenger resolves via `challengeClaim` when the locally observed `nextOutputRoot` differs from the claim.
 
 Replay, audit, and outcome metrics include divergence context (`Reason`, `Trace fetch`, optional `First divergence index`) and proof status (`Proof status = not-generated` until fraud-proof generation is implemented).
 
