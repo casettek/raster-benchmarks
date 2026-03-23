@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Instant;
 
-use eyre::{eyre, Context, Result};
+use eyre::{Context, Result, eyre};
 use serde_json::Value;
 
 pub struct RasterWorkloadResult {
@@ -17,7 +17,7 @@ pub struct RasterWorkloadResult {
 }
 
 pub fn warmup_known_workloads() -> Result<()> {
-    for workload in ["raster-hello"] {
+    for workload in ["raster-hello", "l2-kona-poc"] {
         let spec = workload_spec(workload)?;
         ensure_workload_binary(&spec)?;
     }
@@ -25,18 +25,28 @@ pub fn warmup_known_workloads() -> Result<()> {
 }
 
 pub fn run(workload: &str, run_id: &str) -> Result<Option<RasterWorkloadResult>> {
-    let spec = match workload {
-        "stub" => return Ok(None),
-        _ => workload_spec(workload)?,
-    };
+    let spec = workload_spec(workload)?;
 
     ensure_workload_binary(&spec)?;
+    let input_json = workload_input_json(&spec)?;
 
     let start = Instant::now();
-    let output = Command::new(spec.bin_path)
+    let mut command = Command::new(spec.bin_path);
+    command
         .current_dir(spec.run_dir)
         .arg("--input")
-        .arg(spec.input_json)
+        .arg(input_json);
+
+    if workload == "l2-kona-poc"
+        && let Ok(mode) = std::env::var("L2_KONA_EXECUTION_MODE")
+    {
+        let trimmed = mode.trim();
+        if !trimmed.is_empty() {
+            command.arg("--execution-mode").arg(trimmed);
+        }
+    }
+
+    let output = command
         .output()
         .wrap_err("failed to execute Raster workload")?;
 
@@ -108,12 +118,25 @@ fn workload_spec(workload: &str) -> Result<WorkloadSpec> {
         "raster-hello" => Ok(WorkloadSpec {
             run_dir: "apps/workloads/raster-hello",
             bin_path: "../../../target/debug/workload-raster-hello",
-            input_json: "\"Raster\"",
+            input: WorkloadInput::Inline("\"Raster\""),
+        }),
+        "l2-kona-poc" => Ok(WorkloadSpec {
+            run_dir: "apps/workloads/l2-kona-poc",
+            bin_path: "../../../target/debug/workload-l2-kona-poc",
+            input: WorkloadInput::FixtureFile("runs/fixtures/l2-poc-synth-fixture.json"),
         }),
         _ => Err(eyre!(
-            "Unknown workload '{}'. Expected 'stub' or 'raster-hello'.",
+            "Unknown workload '{}'. Expected 'raster-hello' or 'l2-kona-poc'.",
             workload
         )),
+    }
+}
+
+fn workload_input_json(spec: &WorkloadSpec) -> Result<String> {
+    match spec.input {
+        WorkloadInput::Inline(value) => Ok(value.to_string()),
+        WorkloadInput::FixtureFile(path) => std::fs::read_to_string(path)
+            .wrap_err_with(|| format!("failed to load fixture input JSON from {path}")),
     }
 }
 
@@ -196,5 +219,11 @@ fn raster_revision() -> String {
 struct WorkloadSpec {
     run_dir: &'static str,
     bin_path: &'static str,
-    input_json: &'static str,
+    input: WorkloadInput,
+}
+
+#[derive(Clone, Copy)]
+enum WorkloadInput {
+    Inline(&'static str),
+    FixtureFile(&'static str),
 }

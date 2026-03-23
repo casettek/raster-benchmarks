@@ -1,0 +1,323 @@
+{
+  "contract_version": "l2-poc-chunk-plan-v1",
+  "fixture_ref": "runs/fixtures/l2-poc-synth-fixture.json",
+  "fixture_id": "l2-poc-synth-v1",
+  "tile_progression_model": "uniform execute_chunk tiles seeded from pre_checkpoint; the final tile seals the canonical block",
+  "chunking_policy": {
+    "kind": "fixed-tx-count",
+    "chunk_size": 1,
+    "tracked_tx_count": 5,
+    "supplemental_tx_count": 5,
+    "execution_tx_count": 10
+  },
+  "block_global": {
+    "start_block": 26207960,
+    "end_block": 26207960,
+    "start_timestamp": 1744218460,
+    "gas_limit": 60000000,
+    "fee_recipient": "0x4200000000000000000000000000000000000011",
+    "batch_hash": "0xb9ef076572948183c38d75a6b8966236c1030c83c0e6ab50b813266de50be229",
+    "prev_output_root": "0x1111111111111111111111111111111111111111111111111111111111111111",
+    "rollup_config_ref": "fixtures/l2-poc/rollup-config-v1.json",
+    "witness_bundle_ref": "fixtures/l2-poc/synthetic-witness-bundle-v1.json",
+    "message_passer_storage_root": "0x7aa2621a97f64f9e6c4d674c7664929e0c6d499e517c9838651258bc69510697"
+  },
+  "tile_checkpoint_contract": {
+    "block_global_fields": [
+      "start_block",
+      "end_block",
+      "start_timestamp",
+      "gas_limit",
+      "fee_recipient",
+      "batch_hash",
+      "prev_output_root",
+      "rollup_config_ref",
+      "witness_bundle_ref",
+      "message_passer_storage_root"
+    ],
+    "per_tile_fields": [
+      "start_tx_index",
+      "end_tx_index_exclusive",
+      "tx_ids",
+      "tx_hashes",
+      "tracked_tx_ids",
+      "supplemental_tx_ids",
+      "seals_block"
+    ],
+    "carry_forward_fields": [
+      "tx_cursor",
+      "pending_header_hash",
+      "pending_state_root",
+      "gas_used_so_far",
+      "last_executed_tx_hash",
+      "witness_bundle_ref"
+    ],
+    "finalization_fields": [
+      "next_output_root",
+      "sealed_block_hash",
+      "total_gas_used"
+    ]
+  },
+  "tiles": [
+    {
+      "tile_index": 0,
+      "tile_kind": "execute_chunk",
+      "start_tx_index": 0,
+      "end_tx_index_exclusive": 1,
+      "tx_count": 1,
+      "tx_ids": [
+        "alice_to_bob_1"
+      ],
+      "tx_hashes": [
+        "0x24b776bee9799bef3cc487401151d71c08241255882633870b442c673651ce60"
+      ],
+      "tracked_tx_ids": [
+        "alice_to_bob_1"
+      ],
+      "supplemental_tx_ids": [],
+      "seals_block": false,
+      "input_checkpoint": {
+        "checkpoint_kind": "pre_checkpoint",
+        "tx_cursor": 0
+      },
+      "output_checkpoint": {
+        "checkpoint_kind": "chunk_checkpoint",
+        "tx_cursor": 1
+      }
+    },
+    {
+      "tile_index": 1,
+      "tile_kind": "execute_chunk",
+      "start_tx_index": 1,
+      "end_tx_index_exclusive": 2,
+      "tx_count": 1,
+      "tx_ids": [
+        "alice_to_carol_1"
+      ],
+      "tx_hashes": [
+        "0xe06c6f8d15665606ecf92b19b6d7333d072c64a3e45a492470ecbd13cf116d97"
+      ],
+      "tracked_tx_ids": [
+        "alice_to_carol_1"
+      ],
+      "supplemental_tx_ids": [],
+      "seals_block": false,
+      "input_checkpoint": {
+        "checkpoint_kind": "chunk_checkpoint",
+        "tx_cursor": 1
+      },
+      "output_checkpoint": {
+        "checkpoint_kind": "chunk_checkpoint",
+        "tx_cursor": 2
+      }
+    },
+    {
+      "tile_index": 2,
+      "tile_kind": "execute_chunk",
+      "start_tx_index": 2,
+      "end_tx_index_exclusive": 3,
+      "tx_count": 1,
+      "tx_ids": [
+        "bob_to_alice_1"
+      ],
+      "tx_hashes": [
+        "0xcb21cd3cbe16f3653b946d16253c7bbf1fef0a5c7cc7f6dc8daafb8c1239bfbb"
+      ],
+      "tracked_tx_ids": [
+        "bob_to_alice_1"
+      ],
+      "supplemental_tx_ids": [],
+      "seals_block": false,
+      "input_checkpoint": {
+        "checkpoint_kind": "chunk_checkpoint",
+        "tx_cursor": 2
+      },
+      "output_checkpoint": {
+        "checkpoint_kind": "chunk_checkpoint",
+        "tx_cursor": 3
+      }
+    },
+    {
+      "tile_index": 3,
+      "tile_kind": "execute_chunk",
+      "start_tx_index": 3,
+      "end_tx_index_exclusive": 4,
+      "tx_count": 1,
+      "tx_ids": [
+        "carol_to_bob_1"
+      ],
+      "tx_hashes": [
+        "0x99776a682dfc28c0c3f173ee61f7177dee3221875918c7eb432663cea7c72019"
+      ],
+      "tracked_tx_ids": [
+        "carol_to_bob_1"
+      ],
+      "supplemental_tx_ids": [],
+      "seals_block": false,
+      "input_checkpoint": {
+        "checkpoint_kind": "chunk_checkpoint",
+        "tx_cursor": 3
+      },
+      "output_checkpoint": {
+        "checkpoint_kind": "chunk_checkpoint",
+        "tx_cursor": 4
+      }
+    },
+    {
+      "tile_index": 4,
+      "tile_kind": "execute_chunk",
+      "start_tx_index": 4,
+      "end_tx_index_exclusive": 5,
+      "tx_count": 1,
+      "tx_ids": [
+        "alice_to_bob_2"
+      ],
+      "tx_hashes": [
+        "0x0686788003eda5de8529af5423b6b545e93827ee2756a8d8d53fc515dd996123"
+      ],
+      "tracked_tx_ids": [
+        "alice_to_bob_2"
+      ],
+      "supplemental_tx_ids": [],
+      "seals_block": false,
+      "input_checkpoint": {
+        "checkpoint_kind": "chunk_checkpoint",
+        "tx_cursor": 4
+      },
+      "output_checkpoint": {
+        "checkpoint_kind": "chunk_checkpoint",
+        "tx_cursor": 5
+      }
+    },
+    {
+      "tile_index": 5,
+      "tile_kind": "execute_chunk",
+      "start_tx_index": 5,
+      "end_tx_index_exclusive": 6,
+      "tx_count": 1,
+      "tx_ids": [
+        "supporting_tx_1"
+      ],
+      "tx_hashes": [
+        "0x6039b136798a9ecff7aadcacf7eb287efe23031a9f08dcb8ff36079849b8cb1a"
+      ],
+      "tracked_tx_ids": [],
+      "supplemental_tx_ids": [
+        "supporting_tx_1"
+      ],
+      "seals_block": false,
+      "input_checkpoint": {
+        "checkpoint_kind": "chunk_checkpoint",
+        "tx_cursor": 5
+      },
+      "output_checkpoint": {
+        "checkpoint_kind": "chunk_checkpoint",
+        "tx_cursor": 6
+      }
+    },
+    {
+      "tile_index": 6,
+      "tile_kind": "execute_chunk",
+      "start_tx_index": 6,
+      "end_tx_index_exclusive": 7,
+      "tx_count": 1,
+      "tx_ids": [
+        "supporting_tx_2"
+      ],
+      "tx_hashes": [
+        "0x1cd0b81c9175c13527bb398f747ef00eb09b478c11f2baaf97d99a61af42e9ee"
+      ],
+      "tracked_tx_ids": [],
+      "supplemental_tx_ids": [
+        "supporting_tx_2"
+      ],
+      "seals_block": false,
+      "input_checkpoint": {
+        "checkpoint_kind": "chunk_checkpoint",
+        "tx_cursor": 6
+      },
+      "output_checkpoint": {
+        "checkpoint_kind": "chunk_checkpoint",
+        "tx_cursor": 7
+      }
+    },
+    {
+      "tile_index": 7,
+      "tile_kind": "execute_chunk",
+      "start_tx_index": 7,
+      "end_tx_index_exclusive": 8,
+      "tx_count": 1,
+      "tx_ids": [
+        "supporting_tx_3"
+      ],
+      "tx_hashes": [
+        "0x88f5c1b19d5bb198b4051e2a759f8a7f75f36706588b58cb594aa533d7c4e6d0"
+      ],
+      "tracked_tx_ids": [],
+      "supplemental_tx_ids": [
+        "supporting_tx_3"
+      ],
+      "seals_block": false,
+      "input_checkpoint": {
+        "checkpoint_kind": "chunk_checkpoint",
+        "tx_cursor": 7
+      },
+      "output_checkpoint": {
+        "checkpoint_kind": "chunk_checkpoint",
+        "tx_cursor": 8
+      }
+    },
+    {
+      "tile_index": 8,
+      "tile_kind": "execute_chunk",
+      "start_tx_index": 8,
+      "end_tx_index_exclusive": 9,
+      "tx_count": 1,
+      "tx_ids": [
+        "supporting_tx_4"
+      ],
+      "tx_hashes": [
+        "0x02092106ac099a4326c204c2a7fc64eb43efaa1d882f3acb096508f63c52e73c"
+      ],
+      "tracked_tx_ids": [],
+      "supplemental_tx_ids": [
+        "supporting_tx_4"
+      ],
+      "seals_block": false,
+      "input_checkpoint": {
+        "checkpoint_kind": "chunk_checkpoint",
+        "tx_cursor": 8
+      },
+      "output_checkpoint": {
+        "checkpoint_kind": "chunk_checkpoint",
+        "tx_cursor": 9
+      }
+    },
+    {
+      "tile_index": 9,
+      "tile_kind": "execute_chunk",
+      "start_tx_index": 9,
+      "end_tx_index_exclusive": 10,
+      "tx_count": 1,
+      "tx_ids": [
+        "supporting_tx_5"
+      ],
+      "tx_hashes": [
+        "0xdbadce9c8ef2e59e735f54f8a01ced57c23cbcb310fd69640d60fdb038fc7a61"
+      ],
+      "tracked_tx_ids": [],
+      "supplemental_tx_ids": [
+        "supporting_tx_5"
+      ],
+      "seals_block": true,
+      "input_checkpoint": {
+        "checkpoint_kind": "chunk_checkpoint",
+        "tx_cursor": 9
+      },
+      "output_checkpoint": {
+        "checkpoint_kind": "sealed_block_checkpoint",
+        "tx_cursor": 10
+      }
+    }
+  ]
+}

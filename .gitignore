@@ -9,3 +9,4 @@
 runs/*.json
 runs/artifacts/
 runs/blob-index/
+fixtures/l2-poc/**/LOG.old*

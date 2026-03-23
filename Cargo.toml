@@ -4,6 +4,7 @@ members = [
     "apps/challenger",
     "apps/runner",
     "apps/web-server",
+    "apps/workloads/l2-kona-poc",
     "apps/workloads/raster-hello",
     "crates/shared",
 ]
@@ -24,6 +25,6 @@ alloy = { version = "1", features = [
     "json",
 ] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { version = "=1.0.219", features = ["derive"] }
+serde_json = "=1.0.140"
 eyre = "0.6"

@@ -1,0 +1,81 @@
+{
+  "accounts": {
+    "canonical_story": [
+      "alice",
+      "bob",
+      "carol"
+    ],
+    "fee_recipient": "0x4200000000000000000000000000000000000011",
+    "token_contract": "0xb6def636914ae60173d9007e732684a9eedef26e"
+  },
+  "bundle_description": "Repo-owned local witness package for the canonical synthetic L2 POC fixture",
+  "bundle_id": "l2-poc-synthetic-witness-v1",
+  "description": "Canonical repo-owned synthetic L2 package for strict Kona runs. Generated locally from seed metadata and vendored witness snapshots with no external RPC reads.",
+  "fixture_id": "l2-poc-synth-v1",
+  "output_bundle_ref": "fixtures/l2-poc/synthetic-witness-bundle-v1.json",
+  "output_fixture_ref": "runs/fixtures/l2-poc-synth-fixture.json",
+  "output_manifest_ref": "fixtures/l2-poc/synthetic-witness-closure-manifest-v1.json",
+  "package_metadata": {
+    "bootstrap_source_fixture_ref": "runs/fixtures/l2-poc-plan7-fixture.json",
+    "mode": "repo-owned-synthetic-bootstrap",
+    "notes": [
+      "Regeneration is local-only and deterministic from checked-in seed metadata plus vendored witness snapshots.",
+      "This slice re-homes the canonical package under repo control before a future broader synthetic-state generator replaces the bootstrap witness snapshot lineage."
+    ],
+    "regeneration_command": "python3 scripts/generate_l2_poc_synthetic_fixture.py --force"
+  },
+  "source_bundle_ref": "fixtures/l2-poc/witness-bundle-v1.json",
+  "source_fixture_ref": "runs/fixtures/l2-poc-plan7-fixture.json",
+  "supplemental_transaction_ids": [
+    "supporting_tx_1",
+    "supporting_tx_2",
+    "supporting_tx_3",
+    "supporting_tx_4",
+    "supporting_tx_5"
+  ],
+  "tracked_transaction_ids": [
+    "alice_to_bob_1",
+    "alice_to_carol_1",
+    "bob_to_alice_1",
+    "carol_to_bob_1",
+    "alice_to_bob_2"
+  ],
+  "witness_store_mappings": [
+    {
+      "from": "fixtures/l2-poc/witness-kv-v1",
+      "to": "fixtures/l2-poc/synthetic-witness-kv-v1"
+    },
+    {
+      "from": "fixtures/l2-poc/witness-kv-v1-block-26207960",
+      "to": "fixtures/l2-poc/synthetic-witness-kv-v1-block-26207960"
+    },
+    {
+      "from": "fixtures/l2-poc/witness-kv-v1-block-26207961",
+      "to": "fixtures/l2-poc/synthetic-witness-kv-v1-block-26207961"
+    },
+    {
+      "from": "fixtures/l2-poc/witness-kv-v1-block-26207962",
+      "to": "fixtures/l2-poc/synthetic-witness-kv-v1-block-26207962"
+    },
+    {
+      "from": "fixtures/l2-poc/witness-kv-v1-block-26207963",
+      "to": "fixtures/l2-poc/synthetic-witness-kv-v1-block-26207963"
+    },
+    {
+      "from": "fixtures/l2-poc/witness-kv-v1-block-26208384",
+      "to": "fixtures/l2-poc/synthetic-witness-kv-v1-block-26208384"
+    },
+    {
+      "from": "fixtures/l2-poc/witness-kv-v1-block-26208858",
+      "to": "fixtures/l2-poc/synthetic-witness-kv-v1-block-26208858"
+    },
+    {
+      "from": "fixtures/l2-poc/witness-kv-v1-block-26208927",
+      "to": "fixtures/l2-poc/synthetic-witness-kv-v1-block-26208927"
+    },
+    {
+      "from": "fixtures/l2-poc/witness-kv-v1-block-26211680",
+      "to": "fixtures/l2-poc/synthetic-witness-kv-v1-block-26211680"
+    }
+  ]
+}

@@ -3,6 +3,7 @@ use std::env;
 use alloy::primitives::U256;
 use eyre::Result;
 use shared::challenger::ReplayMode;
+use shared::claimer::default_l2_claim_input;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -24,6 +25,9 @@ async fn main() -> Result<()> {
     eprintln!("Connecting to Anvil at {anvil_url}");
     let provider = shared::anvil::connect_provider(&anvil_url)?;
 
+    // Use default L2 claim input for standalone challenger usage
+    let l2_input = default_l2_claim_input();
+
     match mode.as_str() {
         "honest" => {
             eprintln!("Replaying + resolving claim {claim_id} (honest mode)...");
@@ -32,6 +36,7 @@ async fn main() -> Result<()> {
                 contract_address,
                 claim_id,
                 ReplayMode::Honest,
+                &l2_input,
             )
             .await?;
             println!("{}", serde_json::to_string_pretty(&result)?);
@@ -43,6 +48,7 @@ async fn main() -> Result<()> {
                 contract_address,
                 claim_id,
                 ReplayMode::DishonestSimulation,
+                &l2_input,
             )
             .await?;
             println!("{}", serde_json::to_string_pretty(&result)?);

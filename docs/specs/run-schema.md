@@ -15,7 +15,7 @@ and the scenario runner UI (`web/scenario-runner/index.html`).
 | Field | Type | Nullable | Description |
 |---|---|---|---|
 | `id` | `string` | no | Run identifier, format: `<ISO-timestamp>-<workload>-<scenario>` |
-| `workload` | `string` | no | Workload name (e.g., `"stub"`, `"raster-hello"`) |
+| `workload` | `string` | no | Workload name (e.g., `"raster-hello"`, `"l2-kona-poc"`) |
 | `scenario` | `string` | no | Scenario name: `"honest"` or `"dishonest"` |
 | `timestamp` | `string` | no | RFC 3339 timestamp of when the run started |
 | `raster_pin` | `object` | no | Raster version pin (see below) |
@@ -26,7 +26,7 @@ and the scenario runner UI (`web/scenario-runner/index.html`).
 
 | Field | Type | Nullable | Description |
 |---|---|---|---|
-| `revision` | `string` | no | Pinned Raster dependency revision (full git SHA for local `../raster` integration, or `"stub"` for placeholder workloads) |
+| `revision` | `string` | no | Pinned Raster dependency revision (full git SHA for local `../raster` integration, or `"unknown"` when unavailable) |
 
 ## `StepOutput` object
 
@@ -34,23 +34,46 @@ Each step in the `steps` array has:
 
 | Field | Type | Nullable | Description |
 |---|---|---|---|
-| `key` | `string` | no | Step identifier, one of: `exec`, `trace`, `da`, `claim`, `replay`, `outcome` |
+| `key` | `string` | no | Step identifier (see lifecycles below) |
 | `label` | `string` | no | Human-readable step label |
 | `status` | `string` | no | Step status (see below) |
 | `metrics` | `object` | no | Key-value string pairs of step-specific metrics (may be empty) |
 
-### Step keys and expected statuses
+### Step lifecycles
+
+The step sequence depends on the workload type.
+
+**Legacy lifecycle** (workload: `raster-hello`):
 
 | Key | Label | Status values | Description |
 |---|---|---|---|
-| `exec` | Execute | `pending`, `done` | Raster program execution (`done` for real Raster workloads) |
-| `trace` | Trace | `pending`, `done` | Trace generation (`done` when trace artifacts are emitted) |
-| `da` | DA Submission | `pending`, `done` | Trace data publication step (`done` for workloads that publish DA payload) |
+| `exec` | Execute | `pending`, `done` | Raster program execution |
+| `trace` | Trace | `pending`, `done` | Trace generation |
+| `da` | DA Submission | `pending`, `done` | Trace data publication |
 | `claim` | Submit Claim | `done` | On-chain claim submission via `submitClaim()` |
 | `replay` | Replay | `done` | Replay verification step |
 | `outcome` | Outcome | `settled`, `slashed` | Final on-chain settlement or slashing outcome |
 
+**L2 lifecycle** (workload: `l2-kona-poc`):
+
+| Key | Label | Status values | Description |
+|---|---|---|---|
+| `prepare` | Prepare Batch | `done` | Canonical batch preparation from synthetic fixture |
+| `exec` | Execute Program | `pending`, `done` | Raster program execution (10-tile chunked replay) |
+| `da` | Publish to DA | `pending`, `done` | Trace data publication to DA layer |
+| `claim` | Submit Claim | `done` | Blob-carrying claim submission binding canonical input + claimed output roots |
+| `audit` | Audit | `done` | Independent local replay audit with conditional trace fetch |
+| `await-finalization` | Await Finalization | `done` | Challenge-period countdown and terminal settlement |
+| `outcome` | Outcome | `settled`, `slashed` | Final on-chain finalization or rejection |
+
+Note: the L2 lifecycle does not include a separate `trace` step — trace artifacts are folded into the `exec` step. The `replay` step is replaced by the two-phase `audit` + `await-finalization` sequence.
+
 ### Step metrics by key
+
+**`prepare` metrics (L2 only, `status = done`):**
+- `Fixture` — canonical fixture filename (`l2-poc-synth-fixture.json`)
+- `Batch hash` — keccak256 commitment over tracked transaction bytes (hex)
+- `Block range` — `startBlock → endBlock` range covered by the claim
 
 **`exec` metrics (`status = done`):**
 - `Workload` — executed workload identifier
@@ -73,35 +96,52 @@ Each step in the `steps` array has:
 - `Claim ID` — on-chain claim identifier
 - `Tx hash` — transaction hash
 - `Gas used` — gas consumed by `submitClaim()`
-- `Artifact root` — submitted artifact root (hex)
-- `Result root` — submitted result root (hex)
+- `prevOutputRoot` — prior agreed output root (hex)
+- `nextOutputRoot` — claimed output root after execution (hex)
+- `startBlock` — first L2 block in the claimed range
+- `endBlock` — last L2 block in the claimed range
+- `batchHash` — keccak256 commitment over tracked tx bytes (hex)
+- `Bond amount` — claimer bond in wei (decimal string)
+- `Challenge deadline` — unix timestamp after which the claim can settle
 - `Trace tx hash` — pointer to the DA publication tx hash (`0x00..00` when unset)
 - `Trace payload bytes` — pointer payload byte size (`0` when unset)
 - `Trace codec id` — pointer codec id (`0` when unset)
 
-**`replay` metrics:**
+**`replay` metrics (legacy lifecycle):**
 - `Replay time (ms)` — replay duration in milliseconds
 - `Divergence` — `"None"` (honest) or `"Detected"` (dishonest)
 - `Reason` — deterministic replay/audit reason string
 - `Trace fetch` — conditional trace-audit status (`skipped`, `fetched`, `missing-pointer`)
 - `First divergence index` — optional localized divergence index when available
 
+**`audit` metrics (L2 lifecycle):**
+- `Replay time (ms)` — local replay duration in milliseconds
+- `Divergence` — `"None"` (honest) or `"Detected"` (dishonest)
+- `Reason` — deterministic replay/audit reason string
+- `Trace fetch` — conditional trace-audit status (`skipped`, `fetched`, `missing-pointer`)
+- `First divergence index` — optional localized divergence index when available
+
+**`await-finalization` metrics (L2 lifecycle):**
+- `Challenge deadline` — unix timestamp of the challenge deadline
+- `Challenge period (s)` — challenge period duration in seconds
+- `Status` — `"Deadline passed — settling"` (honest) or `"Challenged before deadline"` (dishonest)
+
 **`outcome` metrics (honest):**
 - `Tx hash` — settlement transaction hash
 - `Gas used` — gas consumed by `settleClaim()`
 - `Final state` — `"Settled"`
+- `Challenge deadline` — the unix timestamp that was waited for
 
 **`outcome` metrics (dishonest):**
 - `Tx hash` — challenge transaction hash
 - `Gas used` — gas consumed by `challengeClaim()`
 - `Final state` — `"Slashed"`
 - `Proof status` — currently `"not-generated"`
-- `Claimer artifact root` — original claimer's artifact root (hex)
-- `Claimer result root` — original claimer's result root (hex)
-- `Observed artifact root` — challenger's divergent artifact root (hex)
-- `Observed result root` — challenger's divergent result root (hex)
+- `Claimer nextOutputRoot` — original claimer's claimed output root (hex)
+- `Observed nextOutputRoot` — challenger's replayed output root (hex)
 - `Trace fetch` — whether challenge path fetched the trace payload
 - `Trace tx hash` / `Trace payload bytes` — included when trace fetch occurred
+- `Challenge deadline` — the deadline that was preempted by the challenge
 
 ## `SummaryOutput` object
 
@@ -118,8 +158,17 @@ Each step in the `steps` array has:
 | `divergence` | `object` | yes | Structured divergence report from replay audit (see below) |
 | `total_time_ms` | `u64` | yes | Total end-to-end run time in milliseconds |
 | `outcome` | `string` | no | Final outcome: `"settled"` or `"slashed"` |
+| `prev_output_root` | `string` | yes | Prior agreed OP output root (hex). L2 only. |
+| `next_output_root` | `string` | yes | Claimed OP output root after execution (hex). L2 only. |
+| `start_block` | `u64` | yes | First L2 block in the claimed range. L2 only. |
+| `end_block` | `u64` | yes | Last L2 block in the claimed range. L2 only. |
+| `batch_hash` | `string` | yes | keccak256 over tracked tx bytes (hex). L2 only. |
+| `input_blob_versioned_hash` | `string` | yes | EIP-4844 blob versioned hash captured at submit time (hex, zero on Anvil). L2 only. |
+| `bond_amount` | `string` | yes | Claimer bond amount in wei (decimal string). L2 only. |
+| `challenge_deadline` | `u64` | yes | Challenge deadline as unix timestamp. L2 only. |
+| `challenge_period_seconds` | `u64` | yes | Challenge period duration in seconds. L2 only. |
 
-Nullable fields are serialized as JSON `null` when not applicable (for example, `stub` workload runs).
+Nullable fields are serialized as JSON `null` when not applicable. L2 claim metadata fields are omitted entirely (via `skip_serializing_if`) for non-L2 workloads.
 
 ## `divergence` object
 
@@ -152,4 +201,4 @@ runs/artifacts/<run-id>/trace.ndjson
 ## Compatibility notes
 
 - This schema must remain stable across both CLI and API/SSE producers.
-- `exec`/`trace`/`da` are `"done"` with metrics for Raster-backed workloads (for example `raster-hello`) and `"pending"` for placeholder `stub` runs.
+- All workloads (`raster-hello`, `l2-kona-poc`) produce real execution results. Step statuses are `"done"` with metrics after workload execution completes.

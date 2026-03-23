@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Stub Raster pin — no real Raster version to reference yet.
+/// Raster dependency pin — tracks the exact revision used for the workload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RasterPin {
     pub revision: String,
@@ -10,7 +10,7 @@ pub struct RasterPin {
 impl Default for RasterPin {
     fn default() -> Self {
         Self {
-            revision: "stub".to_string(),
+            revision: "unknown".to_string(),
         }
     }
 }
@@ -39,7 +39,11 @@ pub struct StepOutput {
 /// Aggregate metrics for a completed run.
 ///
 /// Raster-only fields are `Option` so they serialize as `null` when not
-/// applicable (e.g., stub workloads with no real execution).
+/// applicable (e.g., workloads where a particular metric is not relevant).
+///
+/// L2 claim metadata fields are `Option` and only populated for L2 workloads
+/// (`l2-kona-poc`). They capture enough information to explain what was
+/// submitted onchain and when it can finalize.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SummaryOutput {
     pub exec_time_ms: Option<u64>,
@@ -55,6 +59,35 @@ pub struct SummaryOutput {
     pub divergence: Option<DivergenceSummary>,
     pub total_time_ms: Option<u64>,
     pub outcome: String,
+
+    // --- L2 claim metadata (populated for l2-kona-poc runs) ---
+    /// Prior agreed OP output root (hex).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prev_output_root: Option<String>,
+    /// Claimed OP output root after execution (hex).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_output_root: Option<String>,
+    /// First L2 block in the claimed range.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_block: Option<u64>,
+    /// Last L2 block in the claimed range.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_block: Option<u64>,
+    /// keccak256(concat(tracked tx raw bytes)) (hex).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_hash: Option<String>,
+    /// EIP-4844 blob versioned hash captured at submit time (hex, zero on Anvil).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_blob_versioned_hash: Option<String>,
+    /// Claimer bond amount in wei (decimal string).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bond_amount: Option<String>,
+    /// Challenge deadline as unix timestamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub challenge_deadline: Option<u64>,
+    /// Challenge period duration in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub challenge_period_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
