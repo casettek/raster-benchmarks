@@ -43,6 +43,8 @@ cargo run -p runner -- --scenario dishonest --workload raster-hello
 ```
 
 Each run writes a JSON file to `runs/` with the full step-by-step results.
+Raster workload runs also persist raw trace artifacts plus a compact
+`trace.commitment.json` sidecar under `runs/artifacts/<run-id>/`.
 
 ### 5. Run the L2 Kona POC demo
 

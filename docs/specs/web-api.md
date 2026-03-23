@@ -91,7 +91,7 @@ data: {"message":"<error text>"}
 
 1. `prepare`, `exec`, `da` emitted first as `status: "pending"` placeholders.
 2. `prepare` promoted to `"running"`, then `"done"` with batch metadata (fixture name, batch hash, block range).
-3. `exec` promoted to `"running"`, then `"done"` with execution metrics. No separate `trace` step — trace artifacts are folded into exec.
+3. `exec` promoted to `"running"`, then `"done"` with execution metrics. No separate `trace` step — trace artifacts and trace-commitment metadata are folded into exec.
 4. `da` promoted to `"running"`, then `"done"` with DA publication metrics.
 5. `claim` emitted as `"running"`, then `"done"` with full L2 claim metadata (prevOutputRoot, nextOutputRoot, startBlock, endBlock, batchHash, bond amount, challenge deadline, trace pointer).
 6. `audit` emitted as `"running"`, then `"done"` with local replay results (replay time, divergence status, trace fetch status).

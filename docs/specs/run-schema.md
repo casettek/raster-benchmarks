@@ -79,10 +79,16 @@ Note: the L2 lifecycle does not include a separate `trace` step — trace artifa
 - `Workload` — executed workload identifier
 - `Exec time (ms)` — native workload runtime in milliseconds (measured from workload binary start until trace emission completes; excludes Cargo build/check and host-side trace artifact persistence)
 - `Trace steps` — number of trace step records captured from workload execution
+- `Trace commitment` — aggregate trace commitment over postcard-encoded Raster trace records (hex)
+- `Trace commitment size (bytes)` — serialized `trace.commitment.json` artifact size
+- `Trace commitment file` — relative path to persisted trace-commitment artifact JSON
 
 **`trace` metrics (`status = done`):**
 - `Trace size (bytes)` — serialized trace payload size (NDJSON bytes)
 - `Trace file` — relative path to persisted trace artifact JSON
+- `Trace commitment` — aggregate trace commitment over postcard-encoded Raster trace records (hex)
+- `Trace commitment size (bytes)` — serialized `trace.commitment.json` artifact size
+- `Trace commitment file` — relative path to persisted trace-commitment artifact JSON
 - `Raster revision` — pinned Raster dependency revision used for the run
 
 **`da` metrics (`status = done`):**
@@ -196,6 +202,7 @@ Real Raster workload runs also persist trace artifacts under:
 ```
 runs/artifacts/<run-id>/trace.json
 runs/artifacts/<run-id>/trace.ndjson
+runs/artifacts/<run-id>/trace.commitment.json
 ```
 
 ## Compatibility notes

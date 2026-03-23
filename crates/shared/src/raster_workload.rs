@@ -5,7 +5,14 @@ use std::process::Command;
 use std::time::Instant;
 
 use eyre::{Context, Result, eyre};
+use raster_core::postcard;
+use raster_core::trace::{FnCallRecord, StepRecord};
+use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+const TRACE_COMMITMENT_SCHEME: &str = "raster.trace_record.sha256.postcard.v1";
+const TRACE_AGGREGATE_DOMAIN_SEPARATOR: &[u8] = b"raster.trace_commitment.v1\0";
 
 pub struct RasterWorkloadResult {
     pub raster_revision: String,
@@ -14,6 +21,17 @@ pub struct RasterWorkloadResult {
     pub trace_step_count: usize,
     pub trace_json_path: String,
     pub trace_ndjson_path: String,
+    pub trace_commitment_size_bytes: u64,
+    pub trace_commitment_path: String,
+    pub trace_aggregate_commitment: String,
+}
+
+#[derive(Debug, Serialize)]
+struct TraceCommitmentArtifact {
+    scheme: String,
+    item_count: usize,
+    aggregate_commitment: String,
+    item_commitments: Vec<String>,
 }
 
 pub fn warmup_known_workloads() -> Result<()> {
@@ -61,7 +79,7 @@ pub fn run(workload: &str, run_id: &str) -> Result<Option<RasterWorkloadResult>>
 
     let stdout =
         String::from_utf8(output.stdout).wrap_err("workload stdout was not valid UTF-8")?;
-    let mut trace_records: Vec<Value> = stdout
+    let trace_records: Vec<Value> = stdout
         .lines()
         .filter_map(|line| line.strip_prefix("[trace]"))
         .map(serde_json::from_str::<Value>)
@@ -74,18 +92,12 @@ pub fn run(workload: &str, run_id: &str) -> Result<Option<RasterWorkloadResult>>
         ));
     }
 
-    trace_records.sort_by_key(|record| {
-        record
-            .get("exec_index")
-            .and_then(Value::as_u64)
-            .unwrap_or(u64::MAX)
-    });
-
     let artifact_dir = PathBuf::from("runs").join("artifacts").join(run_id);
     std::fs::create_dir_all(&artifact_dir).wrap_err("failed to create trace artifact directory")?;
 
     let trace_json_path = artifact_dir.join("trace.json");
     let trace_ndjson_path = artifact_dir.join("trace.ndjson");
+    let trace_commitment_path = artifact_dir.join("trace.commitment.json");
 
     let trace_json = serde_json::to_string_pretty(&trace_records)?;
     std::fs::write(&trace_json_path, trace_json.as_bytes())
@@ -100,6 +112,11 @@ pub fn run(workload: &str, run_id: &str) -> Result<Option<RasterWorkloadResult>>
     std::fs::write(&trace_ndjson_path, ndjson_buf.as_bytes())
         .wrap_err("failed to write trace.ndjson artifact")?;
 
+    let trace_commitment_artifact = build_trace_commitment_artifact(&trace_records)?;
+    let trace_commitment_json = serde_json::to_string_pretty(&trace_commitment_artifact)?;
+    std::fs::write(&trace_commitment_path, trace_commitment_json.as_bytes())
+        .wrap_err("failed to write trace.commitment.json artifact")?;
+
     let elapsed = start.elapsed().as_millis();
     let exec_time_ms = elapsed.min(u64::MAX as u128) as u64;
 
@@ -110,6 +127,9 @@ pub fn run(workload: &str, run_id: &str) -> Result<Option<RasterWorkloadResult>>
         trace_step_count: trace_records.len(),
         trace_json_path: trace_json_path.to_string_lossy().to_string(),
         trace_ndjson_path: trace_ndjson_path.to_string_lossy().to_string(),
+        trace_commitment_size_bytes: trace_commitment_json.len() as u64,
+        trace_commitment_path: trace_commitment_path.to_string_lossy().to_string(),
+        trace_aggregate_commitment: trace_commitment_artifact.aggregate_commitment,
     }))
 }
 
@@ -181,6 +201,18 @@ pub fn exec_step_metrics(result: &RasterWorkloadResult, workload: &str) -> HashM
             "Trace steps".to_string(),
             result.trace_step_count.to_string(),
         ),
+        (
+            "Trace commitment".to_string(),
+            result.trace_aggregate_commitment.clone(),
+        ),
+        (
+            "Trace commitment size (bytes)".to_string(),
+            result.trace_commitment_size_bytes.to_string(),
+        ),
+        (
+            "Trace commitment file".to_string(),
+            result.trace_commitment_path.clone(),
+        ),
     ])
 }
 
@@ -192,10 +224,58 @@ pub fn trace_step_metrics(result: &RasterWorkloadResult) -> HashMap<String, Stri
         ),
         ("Trace file".to_string(), result.trace_json_path.clone()),
         (
+            "Trace commitment".to_string(),
+            result.trace_aggregate_commitment.clone(),
+        ),
+        (
+            "Trace commitment size (bytes)".to_string(),
+            result.trace_commitment_size_bytes.to_string(),
+        ),
+        (
+            "Trace commitment file".to_string(),
+            result.trace_commitment_path.clone(),
+        ),
+        (
             "Raster revision".to_string(),
             result.raster_revision.clone(),
         ),
     ])
+}
+
+fn build_trace_commitment_artifact(records: &[Value]) -> Result<TraceCommitmentArtifact> {
+    let mut item_commitments = Vec::with_capacity(records.len());
+    let mut aggregate_hasher = Sha256::new();
+    aggregate_hasher.update(TRACE_AGGREGATE_DOMAIN_SEPARATOR);
+
+    for record in records {
+        let encoded = trace_record_commitment_bytes(record)?;
+        let item_commitment = Sha256::digest(&encoded);
+        aggregate_hasher.update(item_commitment);
+        item_commitments.push(format!("0x{}", alloy::hex::encode(item_commitment)));
+    }
+
+    Ok(TraceCommitmentArtifact {
+        scheme: TRACE_COMMITMENT_SCHEME.to_string(),
+        item_count: records.len(),
+        aggregate_commitment: format!("0x{}", alloy::hex::encode(aggregate_hasher.finalize())),
+        item_commitments,
+    })
+}
+
+fn trace_record_commitment_bytes(record: &Value) -> Result<Vec<u8>> {
+    if let Ok(step_record) = serde_json::from_value::<StepRecord>(record.clone()) {
+        return postcard::to_allocvec(&step_record)
+            .wrap_err("failed to postcard-encode StepRecord trace item");
+    }
+
+    if let Ok(fn_call_record) = serde_json::from_value::<FnCallRecord>(record.clone()) {
+        return postcard::to_allocvec(&fn_call_record)
+            .wrap_err("failed to postcard-encode FnCallRecord trace item");
+    }
+
+    Err(eyre!(
+        "unsupported Raster trace item shape for commitment generation"
+    ))
 }
 
 fn raster_revision() -> String {
@@ -226,4 +306,42 @@ struct WorkloadSpec {
 enum WorkloadInput {
     Inline(&'static str),
     FixtureFile(&'static str),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use raster_core::trace::FnInputParam;
+
+    fn sample_record(name: &str, output: &[u8]) -> FnCallRecord {
+        FnCallRecord {
+            fn_name: name.to_string(),
+            desc: None,
+            inputs: vec![FnInputParam {
+                name: "value".to_string(),
+                ty: "u64".to_string(),
+            }],
+            input_data: vec![1, 2, 3],
+            output_type: Some("u64".to_string()),
+            output_data: output.to_vec(),
+        }
+    }
+
+    #[test]
+    fn trace_commitment_artifact_is_deterministic() {
+        let records = vec![
+            serde_json::to_value(sample_record("first", &[0x01])).expect("serialize first record"),
+            serde_json::to_value(sample_record("second", &[0x02]))
+                .expect("serialize second record"),
+        ];
+
+        let first = build_trace_commitment_artifact(&records).expect("build commitment");
+        let second = build_trace_commitment_artifact(&records).expect("build commitment");
+
+        assert_eq!(first.scheme, TRACE_COMMITMENT_SCHEME);
+        assert_eq!(first.item_count, 2);
+        assert_eq!(first.item_commitments.len(), 2);
+        assert_eq!(first.aggregate_commitment, second.aggregate_commitment);
+        assert_eq!(first.item_commitments, second.item_commitments);
+    }
 }
