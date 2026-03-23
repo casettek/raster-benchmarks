@@ -106,11 +106,11 @@ L2 runs use the expanded lifecycle:
 1. **Prepare Batch** — load the canonical synthetic fixture and derive batch identity.
 2. **Execute Program** — run the Raster program (10 chunked tile invocations). Trace
    artifacts are folded into execution (no separate `trace` step).
-3. **Publish to DA** — publish trace payload via blob tx.
+3. **Publish to DA** — publish `trace.commitment.json` via blob tx.
 4. **Submit Claim** — submit blob-carrying settlement claim with bond, binding:
    `prevOutputRoot`, `nextOutputRoot`, `startBlock`, `endBlock`, `batchHash`,
    `inputBlobVersionedHash`.
-5. **Audit** — independent local replay comparison with conditional trace fetch.
+5. **Audit** — independent local replay comparison against the published trace commitment.
 6. **Await Finalization** — challenge-period countdown (120s default).
 7. **Outcome** — terminal `Settled` (honest) or `Slashed` (dishonest).
 
@@ -132,7 +132,7 @@ and `runs/fixtures/l2-kona-poc-dishonest.json`.
 - Submits L2 settlement claim with claimer bond, binding:
   `prevOutputRoot`, `nextOutputRoot`, `startBlock`, `endBlock`, `batchHash`.
 - Contract records `challengeDeadline = createdAt + challengePeriod`.
-- Audit step confirms no divergence; trace fetch is `skipped`.
+- Audit step fetches the published trace commitment and confirms no divergence.
 - Await-finalization step waits for the challenge deadline to pass.
 - After challenge deadline, claim settles and bond is returned to claimer.
 - Canonical deterministic `nextOutputRoot` for the synthetic fixture:
@@ -142,7 +142,7 @@ and `runs/fixtures/l2-kona-poc-dishonest.json`.
 
 - Uses same canonical fixture input bytes and block target.
 - Replay/audit flow computes a deliberately wrong `nextOutputRoot` (byte-flipped).
-- Audit step detects divergence and fetches trace payload from DA pointer.
+- Audit step fetches the published trace commitment from the DA pointer and detects divergence.
 - Challenger calls `challengeClaim` with the divergent root before the deadline.
 - Await-finalization step shows `Challenged before deadline`.
 - Contract transitions to `Slashed`, bond transferred to challenger.

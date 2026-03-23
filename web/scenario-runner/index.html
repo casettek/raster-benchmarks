@@ -938,6 +938,7 @@
             const fmtGas = v => v != null ? v.toLocaleString('en-US') : na;
             const fmtDur = v => v != null ? formatDuration(v / 1000) : na;
             const fmtSize = v => v != null ? formatBytes(v) : na;
+            const displayedTraceSize = s.trace_commitment_size_bytes ?? s.trace_size_bytes;
 
             const fraudRows = (s.fraud_proof_time_ms != null) ? `
                 <div class="result-row">
@@ -995,8 +996,8 @@
                     <span class="result-value">${fmtDur(s.exec_time_ms)}</span>
                 </div>
                 <div class="result-row">
-                    <span class="result-label">Trace size</span>
-                    <span class="result-value">${fmtSize(s.trace_size_bytes)}</span>
+                    <span class="result-label">Trace commitment size</span>
+                    <span class="result-value">${fmtSize(displayedTraceSize)}</span>
                 </div>
                 <div class="result-row">
                     <span class="result-label">DA availability gas</span>
@@ -1205,11 +1206,12 @@
             const cFmtGas = v => v != null ? v.toLocaleString('en-US') : null;
             const cFmtDur = v => v != null ? formatDuration(v / 1000) : null;
             const cFmtBytes = v => v != null ? formatBytes(v) : null;
+            const traceSizeFor = run => run.summary.trace_commitment_size_bytes ?? run.summary.trace_size_bytes;
 
             const rows = [
                 { group: 'Claimer' },
                 { label: 'Native execution time', a: cFmtDur(a.summary.exec_time_ms), b: cFmtDur(b.summary.exec_time_ms) },
-                { label: 'Trace size', a: cFmtBytes(a.summary.trace_size_bytes), b: cFmtBytes(b.summary.trace_size_bytes) },
+                { label: 'Trace commitment size', a: cFmtBytes(traceSizeFor(a)), b: cFmtBytes(traceSizeFor(b)) },
                 { label: 'DA availability gas', a: cFmtGas(a.summary.da_gas), b: cFmtGas(b.summary.da_gas) },
                 { label: 'Claim submission gas', a: cFmtGas(a.summary.claim_gas), b: cFmtGas(b.summary.claim_gas) },
                 { group: 'Challenger' },

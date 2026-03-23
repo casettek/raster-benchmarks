@@ -43,6 +43,8 @@ cargo run -p runner -- --scenario dishonest --workload raster-hello
 ```
 
 Each run writes a JSON file to `runs/` with the full step-by-step results.
+Raster workload runs also persist raw trace artifacts plus a compact
+`trace.commitment.json` sidecar under `runs/artifacts/<run-id>/`.
 
 ### 5. Run the L2 Kona POC demo
 
@@ -62,7 +64,7 @@ The L2 lifecycle uses an expanded step sequence:
 
 1. **Prepare Batch** — loads the canonical synthetic fixture and identifies the batch
 2. **Execute Program** — runs the Raster program (10 chunked tile invocations)
-3. **Publish to DA** — publishes trace payload for audit
+3. **Publish to DA** — publishes the compact trace-commitment payload for audit
 4. **Submit Claim** — submits the blob-carrying settlement claim with bond
 5. **Audit** — independent local replay comparison
 6. **Await Finalization** — challenge-period countdown (120s default on Anvil)

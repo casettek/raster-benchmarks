@@ -6101,8 +6101,10 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "eyre",
+ "raster-core",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
 ]
 

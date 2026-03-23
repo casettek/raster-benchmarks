@@ -9,3 +9,5 @@ tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 eyre = { workspace = true }
+sha2 = "0.10.9"
+raster-core = { version = "0.1.0", path = "../../../raster/crates/raster-core", features = ["std"] }

@@ -40,6 +40,9 @@ contract ClaimVerifier is IClaimVerifier {
     ) external payable returns (uint256 claimId) {
         require(msg.value >= minBond, "insufficient bond");
         require(startBlock <= endBlock, "invalid block range");
+        require(traceTxHash != bytes32(0), "missing trace tx hash");
+        require(tracePayloadBytes > 0, "missing trace payload");
+        require(traceCodecId != 0, "missing trace codec");
 
         uint64 deadline = uint64(block.timestamp) + challengePeriod;
 

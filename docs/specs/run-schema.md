@@ -49,7 +49,7 @@ The step sequence depends on the workload type.
 |---|---|---|---|
 | `exec` | Execute | `pending`, `done` | Raster program execution |
 | `trace` | Trace | `pending`, `done` | Trace generation |
-| `da` | DA Submission | `pending`, `done` | Trace data publication |
+| `da` | DA Submission | `pending`, `done` | Trace-commitment artifact publication |
 | `claim` | Submit Claim | `done` | On-chain claim submission via `submitClaim()` |
 | `replay` | Replay | `done` | Replay verification step |
 | `outcome` | Outcome | `settled`, `slashed` | Final on-chain settlement or slashing outcome |
@@ -60,7 +60,7 @@ The step sequence depends on the workload type.
 |---|---|---|---|
 | `prepare` | Prepare Batch | `done` | Canonical batch preparation from synthetic fixture |
 | `exec` | Execute Program | `pending`, `done` | Raster program execution (10-tile chunked replay) |
-| `da` | Publish to DA | `pending`, `done` | Trace data publication to DA layer |
+| `da` | Publish to DA | `pending`, `done` | Trace-commitment artifact publication to DA layer |
 | `claim` | Submit Claim | `done` | Blob-carrying claim submission binding canonical input + claimed output roots |
 | `audit` | Audit | `done` | Independent local replay audit with conditional trace fetch |
 | `await-finalization` | Await Finalization | `done` | Challenge-period countdown and terminal settlement |
@@ -79,16 +79,22 @@ Note: the L2 lifecycle does not include a separate `trace` step — trace artifa
 - `Workload` — executed workload identifier
 - `Exec time (ms)` — native workload runtime in milliseconds (measured from workload binary start until trace emission completes; excludes Cargo build/check and host-side trace artifact persistence)
 - `Trace steps` — number of trace step records captured from workload execution
+- `Trace commitment` — aggregate trace commitment over postcard-encoded Raster trace records (hex)
+- `Trace commitment size (bytes)` — serialized `trace.commitment.json` artifact size
+- `Trace commitment file` — relative path to persisted trace-commitment artifact JSON
 
 **`trace` metrics (`status = done`):**
 - `Trace size (bytes)` — serialized trace payload size (NDJSON bytes)
 - `Trace file` — relative path to persisted trace artifact JSON
+- `Trace commitment` — aggregate trace commitment over postcard-encoded Raster trace records (hex)
+- `Trace commitment size (bytes)` — serialized `trace.commitment.json` artifact size
+- `Trace commitment file` — relative path to persisted trace-commitment artifact JSON
 - `Raster revision` — pinned Raster dependency revision used for the run
 
 **`da` metrics (`status = done`):**
 - `Blob tx hash` - publication transaction hash used as claim trace pointer
 - `Payload bytes` - published trace payload size in bytes
-- `Codec id` - trace codec discriminator (`1` = `trace.ndjson` v1)
+- `Codec id` - trace codec discriminator (`2` = `trace.commitment.json` v1)
 - `Gas used` - gas consumed by the DA publication tx
 - `Payload hash` - keccak256 hash emitted by `TracePublished`
 
@@ -103,23 +109,23 @@ Note: the L2 lifecycle does not include a separate `trace` step — trace artifa
 - `batchHash` — keccak256 commitment over tracked tx bytes (hex)
 - `Bond amount` — claimer bond in wei (decimal string)
 - `Challenge deadline` — unix timestamp after which the claim can settle
-- `Trace tx hash` — pointer to the DA publication tx hash (`0x00..00` when unset)
-- `Trace payload bytes` — pointer payload byte size (`0` when unset)
-- `Trace codec id` — pointer codec id (`0` when unset)
+- `Trace tx hash` — pointer to the DA publication tx hash
+- `Trace payload bytes` — pointer payload byte size
+- `Trace codec id` — pointer codec id
 
 **`replay` metrics (legacy lifecycle):**
 - `Replay time (ms)` — replay duration in milliseconds
 - `Divergence` — `"None"` (honest) or `"Detected"` (dishonest)
 - `Reason` — deterministic replay/audit reason string
-- `Trace fetch` — conditional trace-audit status (`skipped`, `fetched`, `missing-pointer`)
-- `First divergence index` — optional localized divergence index when available
+- `Trace fetch` — trace-commitment audit status (`fetched`)
+- `First divergence index` — optional first mismatching commitment item index when available
 
 **`audit` metrics (L2 lifecycle):**
 - `Replay time (ms)` — local replay duration in milliseconds
 - `Divergence` — `"None"` (honest) or `"Detected"` (dishonest)
 - `Reason` — deterministic replay/audit reason string
-- `Trace fetch` — conditional trace-audit status (`skipped`, `fetched`, `missing-pointer`)
-- `First divergence index` — optional localized divergence index when available
+- `Trace fetch` — trace-commitment audit status (`fetched`)
+- `First divergence index` — optional first mismatching commitment item index when available
 
 **`await-finalization` metrics (L2 lifecycle):**
 - `Challenge deadline` — unix timestamp of the challenge deadline
@@ -149,6 +155,7 @@ Note: the L2 lifecycle does not include a separate `trace` step — trace artifa
 |---|---|---|---|
 | `exec_time_ms` | `u64` | yes | Raster execution time in milliseconds |
 | `trace_size_bytes` | `u64` | yes | Generated trace size in bytes |
+| `trace_commitment_size_bytes` | `u64` | yes | Published trace-commitment artifact size in bytes |
 | `da_gas` | `u64` | yes | Gas consumed for DA submission |
 | `claim_gas` | `u64` | no | Gas consumed by `submitClaim()` transaction |
 | `replay_time_ms` | `u64` | yes | Replay verification time in milliseconds |
@@ -177,7 +184,7 @@ Nullable fields are serialized as JSON `null` when not applicable. L2 claim meta
 | `detected` | `bool` | no | Whether replay output diverged from claimed output |
 | `reason` | `string` | no | Human-readable replay/audit decision reason |
 | `first_divergence_index` | `u64` | yes | First divergence index when trace localization is available |
-| `trace_fetch_status` | `string` | no | `"skipped"`, `"fetched"`, or `"missing-pointer"` |
+| `trace_fetch_status` | `string` | no | `"fetched"` |
 | `trace_tx_hash` | `string` | yes | Pointer hash used for conditional trace fetch |
 | `trace_payload_bytes` | `u32` | yes | Pointer payload size validated during trace fetch |
 
@@ -196,6 +203,7 @@ Real Raster workload runs also persist trace artifacts under:
 ```
 runs/artifacts/<run-id>/trace.json
 runs/artifacts/<run-id>/trace.ndjson
+runs/artifacts/<run-id>/trace.commitment.json
 ```
 
 ## Compatibility notes

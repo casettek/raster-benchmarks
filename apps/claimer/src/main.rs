@@ -1,7 +1,7 @@
 use std::env;
 use std::path::PathBuf;
 
-use eyre::Result;
+use eyre::{Result, eyre};
 use shared::claimer::default_l2_claim_input;
 use shared::deploy::DEFAULT_MIN_BOND;
 
@@ -29,17 +29,10 @@ async fn main() -> Result<()> {
     let contract_address = shared::deploy::deploy_claim_verifier(&provider, &forge_out).await?;
     eprintln!("ClaimVerifier deployed at {contract_address}");
 
-    // Submit claim via shared library with default L2 fields
-    let l2_input = default_l2_claim_input();
-    let result = shared::claimer::submit_claim(
-        &provider,
-        contract_address,
-        &l2_input,
-        None,
-        DEFAULT_MIN_BOND,
-    )
-    .await?;
-    println!("{}", serde_json::to_string_pretty(&result)?);
-
-    Ok(())
+    // Standalone claim submission is no longer allowed without a published trace pointer.
+    let _ = default_l2_claim_input();
+    let _ = DEFAULT_MIN_BOND;
+    Err(eyre!(
+        "standalone claimer no longer supports zero trace pointers; submit through runner or web-server after DA publication"
+    ))
 }

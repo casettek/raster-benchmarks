@@ -2,10 +2,16 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use eyre::{Context, Result, eyre};
-use serde_json::Value;
+use raster_core::postcard;
+use raster_core::trace::StepRecord;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+const TRACE_COMMITMENT_SCHEME: &str = "raster.trace_record.sha256.postcard.v1";
+const TRACE_AGGREGATE_DOMAIN_SEPARATOR: &[u8] = b"raster.trace_commitment.v1\0";
 
 pub struct RasterWorkloadResult {
     pub raster_revision: String,
@@ -14,6 +20,24 @@ pub struct RasterWorkloadResult {
     pub trace_step_count: usize,
     pub trace_json_path: String,
     pub trace_ndjson_path: String,
+    pub trace_commitment_size_bytes: u64,
+    pub trace_commitment_path: String,
+    pub trace_aggregate_commitment: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceCommitmentArtifact {
+    pub scheme: String,
+    pub item_count: usize,
+    pub aggregate_commitment: String,
+    pub item_commitments: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceCommitmentComparison {
+    pub matches: bool,
+    pub reason: String,
+    pub first_divergence_index: Option<u64>,
 }
 
 pub fn warmup_known_workloads() -> Result<()> {
@@ -61,10 +85,10 @@ pub fn run(workload: &str, run_id: &str) -> Result<Option<RasterWorkloadResult>>
 
     let stdout =
         String::from_utf8(output.stdout).wrap_err("workload stdout was not valid UTF-8")?;
-    let mut trace_records: Vec<Value> = stdout
+    let trace_records: Vec<StepRecord> = stdout
         .lines()
         .filter_map(|line| line.strip_prefix("[trace]"))
-        .map(serde_json::from_str::<Value>)
+        .map(serde_json::from_str::<StepRecord>)
         .collect::<serde_json::Result<_>>()
         .wrap_err("failed to parse workload trace records")?;
 
@@ -74,18 +98,12 @@ pub fn run(workload: &str, run_id: &str) -> Result<Option<RasterWorkloadResult>>
         ));
     }
 
-    trace_records.sort_by_key(|record| {
-        record
-            .get("exec_index")
-            .and_then(Value::as_u64)
-            .unwrap_or(u64::MAX)
-    });
-
     let artifact_dir = PathBuf::from("runs").join("artifacts").join(run_id);
     std::fs::create_dir_all(&artifact_dir).wrap_err("failed to create trace artifact directory")?;
 
     let trace_json_path = artifact_dir.join("trace.json");
     let trace_ndjson_path = artifact_dir.join("trace.ndjson");
+    let trace_commitment_path = artifact_dir.join("trace.commitment.json");
 
     let trace_json = serde_json::to_string_pretty(&trace_records)?;
     std::fs::write(&trace_json_path, trace_json.as_bytes())
@@ -100,6 +118,11 @@ pub fn run(workload: &str, run_id: &str) -> Result<Option<RasterWorkloadResult>>
     std::fs::write(&trace_ndjson_path, ndjson_buf.as_bytes())
         .wrap_err("failed to write trace.ndjson artifact")?;
 
+    let trace_commitment_artifact = build_trace_commitment_artifact(&trace_records)?;
+    let trace_commitment_json = serde_json::to_string_pretty(&trace_commitment_artifact)?;
+    std::fs::write(&trace_commitment_path, trace_commitment_json.as_bytes())
+        .wrap_err("failed to write trace.commitment.json artifact")?;
+
     let elapsed = start.elapsed().as_millis();
     let exec_time_ms = elapsed.min(u64::MAX as u128) as u64;
 
@@ -110,6 +133,9 @@ pub fn run(workload: &str, run_id: &str) -> Result<Option<RasterWorkloadResult>>
         trace_step_count: trace_records.len(),
         trace_json_path: trace_json_path.to_string_lossy().to_string(),
         trace_ndjson_path: trace_ndjson_path.to_string_lossy().to_string(),
+        trace_commitment_size_bytes: trace_commitment_json.len() as u64,
+        trace_commitment_path: trace_commitment_path.to_string_lossy().to_string(),
+        trace_aggregate_commitment: trace_commitment_artifact.aggregate_commitment,
     }))
 }
 
@@ -141,11 +167,6 @@ fn workload_input_json(spec: &WorkloadSpec) -> Result<String> {
 }
 
 fn ensure_workload_binary(spec: &WorkloadSpec) -> Result<()> {
-    let bin_abs = Path::new(spec.run_dir).join(spec.bin_path);
-    if bin_abs.exists() {
-        return Ok(());
-    }
-
     let build_output = Command::new("cargo")
         .current_dir(spec.run_dir)
         .env("RISC0_SKIP_BUILD", "1")
@@ -162,12 +183,85 @@ fn ensure_workload_binary(spec: &WorkloadSpec) -> Result<()> {
         ));
     }
 
+    let bin_abs = Path::new(spec.run_dir).join(spec.bin_path);
+    if !bin_abs.exists() {
+        return Err(eyre!(
+            "Raster workload build completed but binary was not found at {}",
+            bin_abs.display()
+        ));
+    }
+
     Ok(())
 }
 
 pub fn load_trace_payload(result: &RasterWorkloadResult) -> Result<Vec<u8>> {
     std::fs::read(&result.trace_ndjson_path)
         .wrap_err("failed to load trace payload for DA publication")
+}
+
+pub fn load_trace_commitment_payload(result: &RasterWorkloadResult) -> Result<Vec<u8>> {
+    std::fs::read(&result.trace_commitment_path)
+        .wrap_err("failed to load trace commitment payload for DA publication")
+}
+
+pub fn decode_trace_commitment_payload(payload: &[u8]) -> Result<TraceCommitmentArtifact> {
+    serde_json::from_slice(payload).wrap_err("failed to decode trace commitment payload")
+}
+
+pub fn compare_trace_commitments(
+    expected: &TraceCommitmentArtifact,
+    observed: &TraceCommitmentArtifact,
+) -> TraceCommitmentComparison {
+    if expected.scheme != observed.scheme {
+        return TraceCommitmentComparison {
+            matches: false,
+            reason: format!(
+                "Trace commitment scheme mismatch: published {}, local {}",
+                expected.scheme, observed.scheme
+            ),
+            first_divergence_index: None,
+        };
+    }
+
+    if let Some(index) = first_divergence_index(expected, observed) {
+        return TraceCommitmentComparison {
+            matches: false,
+            reason: "Local replay trace commitment differs from published trace commitment"
+                .to_string(),
+            first_divergence_index: Some(index),
+        };
+    }
+
+    if expected.aggregate_commitment != observed.aggregate_commitment {
+        return TraceCommitmentComparison {
+            matches: false,
+            reason: "Trace commitment aggregate digest differs despite matching item list"
+                .to_string(),
+            first_divergence_index: None,
+        };
+    }
+
+    TraceCommitmentComparison {
+        matches: true,
+        reason: "Local replay matched published trace commitment".to_string(),
+        first_divergence_index: None,
+    }
+}
+
+pub fn rerun_trace_commitment(workload: &str, label: &str) -> Result<TraceCommitmentArtifact> {
+    let run_id = format!(
+        "audit-{}-{}-{}",
+        workload,
+        label,
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    );
+    let result = run(workload, &run_id)?
+        .ok_or_else(|| eyre!("Raster workload rerun returned no trace commitment"))?;
+    let payload = load_trace_commitment_payload(&result)?;
+    decode_trace_commitment_payload(&payload)
 }
 
 pub fn exec_step_metrics(result: &RasterWorkloadResult, workload: &str) -> HashMap<String, String> {
@@ -181,6 +275,18 @@ pub fn exec_step_metrics(result: &RasterWorkloadResult, workload: &str) -> HashM
             "Trace steps".to_string(),
             result.trace_step_count.to_string(),
         ),
+        (
+            "Trace commitment".to_string(),
+            result.trace_aggregate_commitment.clone(),
+        ),
+        (
+            "Trace commitment size (bytes)".to_string(),
+            result.trace_commitment_size_bytes.to_string(),
+        ),
+        (
+            "Trace commitment file".to_string(),
+            result.trace_commitment_path.clone(),
+        ),
     ])
 }
 
@@ -192,10 +298,66 @@ pub fn trace_step_metrics(result: &RasterWorkloadResult) -> HashMap<String, Stri
         ),
         ("Trace file".to_string(), result.trace_json_path.clone()),
         (
+            "Trace commitment".to_string(),
+            result.trace_aggregate_commitment.clone(),
+        ),
+        (
+            "Trace commitment size (bytes)".to_string(),
+            result.trace_commitment_size_bytes.to_string(),
+        ),
+        (
+            "Trace commitment file".to_string(),
+            result.trace_commitment_path.clone(),
+        ),
+        (
             "Raster revision".to_string(),
             result.raster_revision.clone(),
         ),
     ])
+}
+
+fn build_trace_commitment_artifact(records: &[StepRecord]) -> Result<TraceCommitmentArtifact> {
+    let mut item_commitments = Vec::with_capacity(records.len());
+    let mut aggregate_hasher = Sha256::new();
+    aggregate_hasher.update(TRACE_AGGREGATE_DOMAIN_SEPARATOR);
+
+    for record in records {
+        let encoded = postcard::to_allocvec(record)
+            .wrap_err("failed to postcard-encode StepRecord trace item")?;
+        let item_commitment = Sha256::digest(&encoded);
+        aggregate_hasher.update(item_commitment);
+        item_commitments.push(format!("0x{}", alloy::hex::encode(item_commitment)));
+    }
+
+    Ok(TraceCommitmentArtifact {
+        scheme: TRACE_COMMITMENT_SCHEME.to_string(),
+        item_count: records.len(),
+        aggregate_commitment: format!("0x{}", alloy::hex::encode(aggregate_hasher.finalize())),
+        item_commitments,
+    })
+}
+
+fn first_divergence_index(
+    expected: &TraceCommitmentArtifact,
+    observed: &TraceCommitmentArtifact,
+) -> Option<u64> {
+    let shared_len = expected
+        .item_commitments
+        .len()
+        .min(observed.item_commitments.len());
+    for index in 0..shared_len {
+        if expected.item_commitments[index] != observed.item_commitments[index] {
+            return Some(index as u64);
+        }
+    }
+
+    if expected.item_commitments.len() != observed.item_commitments.len()
+        || expected.item_count != observed.item_count
+    {
+        return Some(shared_len as u64);
+    }
+
+    None
 }
 
 fn raster_revision() -> String {
@@ -226,4 +388,76 @@ struct WorkloadSpec {
 enum WorkloadInput {
     Inline(&'static str),
     FixtureFile(&'static str),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use raster_core::cfs::CfsCoordinates;
+    use raster_core::trace::{FnCallRecord, FnInputParam, TileExecRecord};
+
+    fn sample_record(name: &str, output: &[u8]) -> StepRecord {
+        StepRecord::TileExec(TileExecRecord {
+            exec_index: 1,
+            sequence_id: "sample-seq".to_string(),
+            coordinates: CfsCoordinates(vec![0]),
+            intra_sequence_index: 0,
+            fn_call_record: FnCallRecord {
+                fn_name: name.to_string(),
+                desc: None,
+                inputs: vec![FnInputParam {
+                    name: "value".to_string(),
+                    ty: "u64".to_string(),
+                }],
+                input_data: vec![1, 2, 3],
+                output_type: Some("u64".to_string()),
+                output_data: output.to_vec(),
+            },
+        })
+    }
+
+    #[test]
+    fn trace_commitment_artifact_is_deterministic() {
+        let records = vec![
+            sample_record("first", &[0x01]),
+            sample_record("second", &[0x02]),
+        ];
+
+        let first = build_trace_commitment_artifact(&records).expect("build commitment");
+        let second = build_trace_commitment_artifact(&records).expect("build commitment");
+
+        assert_eq!(first.scheme, TRACE_COMMITMENT_SCHEME);
+        assert_eq!(first.item_count, 2);
+        assert_eq!(first.item_commitments.len(), 2);
+        assert_eq!(first.aggregate_commitment, second.aggregate_commitment);
+        assert_eq!(first.item_commitments, second.item_commitments);
+    }
+
+    #[test]
+    fn trace_commitment_comparison_reports_first_diff() {
+        let expected = TraceCommitmentArtifact {
+            scheme: TRACE_COMMITMENT_SCHEME.to_string(),
+            item_count: 3,
+            aggregate_commitment: "0xabc".to_string(),
+            item_commitments: vec![
+                "0x01".to_string(),
+                "0x02".to_string(),
+                "0x03".to_string(),
+            ],
+        };
+        let observed = TraceCommitmentArtifact {
+            scheme: TRACE_COMMITMENT_SCHEME.to_string(),
+            item_count: 3,
+            aggregate_commitment: "0xdef".to_string(),
+            item_commitments: vec![
+                "0x01".to_string(),
+                "0xff".to_string(),
+                "0x03".to_string(),
+            ],
+        };
+
+        let comparison = compare_trace_commitments(&expected, &observed);
+        assert!(!comparison.matches);
+        assert_eq!(comparison.first_divergence_index, Some(1));
+    }
 }
