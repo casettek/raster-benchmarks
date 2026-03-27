@@ -29,21 +29,12 @@ mod claim_verifier_interface {
                 uint64 endBlock;
                 bytes32 batchHash;
                 bytes32 inputBlobVersionedHash;
-                bytes32 traceTxHash;
-                uint32 tracePayloadBytes;
-                uint8 traceCodecId;
+                bytes32 traceBlobVersionedHash;
                 uint256 bondAmount;
                 uint64 createdAt;
                 uint64 challengeDeadline;
                 ClaimState state;
             }
-
-            event TracePublished(
-                address indexed publisher,
-                bytes32 indexed payloadHash,
-                uint32 payloadBytes,
-                uint8 codecId
-            );
 
             event ClaimSubmitted(
                 uint256 indexed claimId,
@@ -54,6 +45,7 @@ mod claim_verifier_interface {
                 uint64 endBlock,
                 bytes32 batchHash,
                 bytes32 inputBlobVersionedHash,
+                bytes32 traceBlobVersionedHash,
                 uint256 bondAmount,
                 uint64 challengeDeadline
             );
@@ -68,20 +60,14 @@ mod claim_verifier_interface {
 
             event ClaimSlashed(uint256 indexed claimId);
 
-            function publishTrace(
-                bytes calldata payload,
-                uint8 codecId
-            ) external returns (bytes32 payloadHash, uint32 payloadBytes);
-
             function submitClaim(
                 bytes32 prevOutputRoot,
                 bytes32 nextOutputRoot,
                 uint64 startBlock,
                 uint64 endBlock,
                 bytes32 batchHash,
-                bytes32 traceTxHash,
-                uint32 tracePayloadBytes,
-                uint8 traceCodecId
+                bytes32 inputBlobVersionedHash,
+                bytes32 traceBlobVersionedHash
             ) external payable returns (uint256 claimId);
 
             function challengeClaim(

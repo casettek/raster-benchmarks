@@ -7,6 +7,7 @@ use eyre::Result;
 use shared::challenger::ReplayMode;
 use shared::claimer::{L2ClaimInput, default_l2_claim_input};
 use shared::deploy::{DEFAULT_CHALLENGE_PERIOD, DEFAULT_MIN_BOND};
+use shared::input_package;
 use shared::raster_workload;
 use shared::run::{DivergenceSummary, RasterPin, RunOutput, StepOutput, SummaryOutput};
 
@@ -55,44 +56,65 @@ async fn main() -> Result<()> {
         eprintln!("Preparing canonical batch from synthetic fixture...");
     }
 
-    // 2. Execute Raster workload when requested
-    let raster_workload_result = raster_workload::run(&cli.workload, &run_id)?;
-
-    // 3. Start chain
+    // 2. Start chain
     eprintln!("Spawning Anvil...");
     let (_anvil, provider) = shared::anvil::spawn_anvil()?;
 
-    // 4. Deploy contract
+    // 3. Publish the canonical input package for L2
+    let (input_publication, input_manifest, input_package_json) =
+        if is_l2 {
+            eprintln!("Publishing canonical input package to Anvil blob storage...");
+            let package_bytes = input_package::build_canonical_input_package()?;
+            let input_package_json = String::from_utf8(package_bytes.clone())
+                .map_err(|_| eyre::eyre!("input package bytes were not valid UTF-8 json"))?;
+            let (publication, manifest) = shared::da::publish_input_package(&provider, package_bytes).await?;
+            (
+                Some(publication),
+                Some(manifest),
+                Some(input_package_json),
+            )
+        } else {
+            (None, None, None)
+        };
+
+    // 4. Execute Raster workload when requested
+    let raster_workload_result = raster_workload::run_with_input_root(
+        &cli.workload,
+        &run_id,
+        input_package_json,
+        None,
+    )?;
+
+    // 5. Deploy contract
     eprintln!("Deploying ClaimVerifier from {}...", forge_out.display());
     let contract_address = shared::deploy::deploy_claim_verifier(&provider, &forge_out).await?;
     eprintln!("ClaimVerifier deployed at {contract_address}");
 
-    // 5. DA publication — publish trace payload for real workloads
-    let da_publication = if let Some(result) = &raster_workload_result {
+    // 6. Publish trace commitment to blob DA for real workloads
+    let (trace_publication, trace_manifest) = if let Some(result) = &raster_workload_result {
         let trace_payload = raster_workload::load_trace_commitment_payload(result)?;
-        let publication = shared::da::publish_trace(
-            &provider,
-            contract_address,
-            trace_payload,
-            shared::da::TRACE_CODEC_COMMITMENT_JSON_V1,
-        )
-        .await?;
-        shared::da::persist_trace_index(&run_id, &publication)?;
-        Some(publication)
+        let (publication, manifest) = shared::da::publish_trace_commitment(&provider, trace_payload).await?;
+        (Some(publication), Some(manifest))
     } else {
-        None
+        (None, None)
     };
+    shared::da::persist_blob_index(
+        &run_id,
+        input_publication.as_ref().zip(input_manifest.as_ref()),
+        trace_publication.as_ref().zip(trace_manifest.as_ref()),
+    )?;
 
     // Derive L2 claim fields from fixture for l2-kona-poc, else use defaults
     let l2_input = resolve_l2_claim_input(&cli.workload)?;
 
-    // 6. Submit claim
+    // 7. Submit claim
     eprintln!("Submitting claim...");
     let claim_result = shared::claimer::submit_claim(
         &provider,
         contract_address,
         &l2_input,
-        da_publication
+        input_publication.as_ref(),
+        trace_publication
             .as_ref()
             .expect("trace publication is required before claim submission"),
         DEFAULT_MIN_BOND,
@@ -103,7 +125,7 @@ async fn main() -> Result<()> {
         claim_result.claim_id, claim_result.gas_used, claim_result.challenge_deadline
     );
 
-    // 7. Audit + Await Finalization (two-phase for L2, combined for others)
+    // 8. Audit + Await Finalization (two-phase for L2, combined for others)
     let replay_mode = if cli.scenario == "honest" {
         ReplayMode::Honest
     } else {
@@ -187,7 +209,8 @@ async fn main() -> Result<()> {
         is_l2,
         &cli.workload,
         &raster_workload_result,
-        &da_publication,
+        &input_publication,
+        &trace_publication,
         &claim_result,
         &audit_result,
         &resolution,
@@ -198,7 +221,8 @@ async fn main() -> Result<()> {
         exec_time_ms,
         trace_size_bytes,
         trace_commitment_size_bytes,
-        &da_publication,
+        &input_publication,
+        &trace_publication,
         &claim_result,
         &resolution,
         outcome_status,
@@ -255,7 +279,8 @@ fn build_steps(
     is_l2: bool,
     workload: &str,
     raster_result: &Option<raster_workload::RasterWorkloadResult>,
-    da_publication: &Option<shared::da::TracePublication>,
+    input_publication: &Option<shared::da::BlobPublication>,
+    trace_publication: &Option<shared::da::BlobPublication>,
     claim_result: &shared::claimer::ClaimResult,
     audit_result: &Option<shared::challenger::AuditResult>,
     resolution: &shared::challenger::AuditResolution,
@@ -278,6 +303,20 @@ fn build_steps(
             "Block range".to_string(),
             format!("{} → {}", claim_result.start_block, claim_result.end_block),
         );
+        if let Some(publication) = input_publication {
+            metrics.insert(
+                "Input blob tx hash".to_string(),
+                publication.manifest_tx_hash.clone(),
+            );
+            metrics.insert(
+                "Input blob versioned hash".to_string(),
+                publication.manifest_blob_versioned_hash.clone(),
+            );
+            metrics.insert(
+                "Input blob chunks".to_string(),
+                publication.chunk_count.to_string(),
+            );
+        }
         steps.push(StepOutput {
             key: "prepare".to_string(),
             label: "Prepare Batch".to_string(),
@@ -327,7 +366,43 @@ fn build_steps(
     }
 
     // --- DA step ---
-    if let Some(publication) = da_publication {
+    if let Some(publication) = trace_publication {
+        let mut metrics = HashMap::from([
+            (
+                "Trace blob tx hash".to_string(),
+                publication.manifest_tx_hash.clone(),
+            ),
+            (
+                "Trace blob versioned hash".to_string(),
+                publication.manifest_blob_versioned_hash.clone(),
+            ),
+            (
+                "Trace payload bytes".to_string(),
+                publication.payload_bytes.to_string(),
+            ),
+            ("Trace codec id".to_string(), publication.codec_id.to_string()),
+            (
+                "Trace chunk count".to_string(),
+                publication.chunk_count.to_string(),
+            ),
+            (
+                "Trace DA gas".to_string(),
+                publication.total_gas_used.to_string(),
+            ),
+            ("Trace payload hash".to_string(), publication.payload_hash.clone()),
+        ]);
+        if let Some(input) = input_publication {
+            metrics.insert("Input blob tx hash".to_string(), input.manifest_tx_hash.clone());
+            metrics.insert(
+                "Input blob versioned hash".to_string(),
+                input.manifest_blob_versioned_hash.clone(),
+            );
+            metrics.insert(
+                "Input chunk count".to_string(),
+                input.chunk_count.to_string(),
+            );
+            metrics.insert("Input DA gas".to_string(), input.total_gas_used.to_string());
+        }
         steps.push(StepOutput {
             key: "da".to_string(),
             label: if is_l2 {
@@ -336,19 +411,7 @@ fn build_steps(
                 "DA Submission".to_string()
             },
             status: "done".to_string(),
-            metrics: HashMap::from([
-                (
-                    "Blob tx hash".to_string(),
-                    publication.trace_tx_hash.clone(),
-                ),
-                (
-                    "Payload bytes".to_string(),
-                    publication.payload_bytes.to_string(),
-                ),
-                ("Codec id".to_string(), publication.codec_id.to_string()),
-                ("Gas used".to_string(), publication.gas_used.to_string()),
-                ("Payload hash".to_string(), publication.payload_hash.clone()),
-            ]),
+            metrics,
         });
     } else {
         steps.push(StepOutput {
@@ -395,6 +458,9 @@ fn build_steps(
             "Trace fetch".to_string(),
             audit.divergence.trace_fetch_status.clone(),
         );
+        if let Some(status) = &audit.divergence.input_fetch_status {
+            m.insert("Input fetch".to_string(), status.clone());
+        }
         if let Some(index) = audit.divergence.first_divergence_index {
             m.insert("First divergence index".to_string(), index.to_string());
         }
@@ -449,6 +515,9 @@ fn build_steps(
             "Trace fetch".to_string(),
             resolution.divergence.trace_fetch_status.clone(),
         );
+        if let Some(status) = &resolution.divergence.input_fetch_status {
+            m.insert("Input fetch".to_string(), status.clone());
+        }
         if let Some(index) = resolution.divergence.first_divergence_index {
             m.insert("First divergence index".to_string(), index.to_string());
         }
@@ -478,19 +547,19 @@ fn build_steps(
         "Challenge deadline".to_string(),
         resolution.challenge_deadline.to_string(),
     );
-    if let Some(trace_tx_hash) = &resolution.divergence.trace_tx_hash {
-        outcome_metrics.insert("Trace tx hash".to_string(), trace_tx_hash.clone());
-    }
-    if let Some(trace_payload_bytes) = resolution.divergence.trace_payload_bytes {
-        outcome_metrics.insert(
-            "Trace payload bytes".to_string(),
-            trace_payload_bytes.to_string(),
-        );
-    }
     outcome_metrics.insert(
         "Trace fetch".to_string(),
         resolution.divergence.trace_fetch_status.clone(),
     );
+    if let Some(status) = &resolution.divergence.input_fetch_status {
+        outcome_metrics.insert("Input fetch".to_string(), status.clone());
+    }
+    if let Some(trace_hash) = &resolution.divergence.trace_blob_versioned_hash {
+        outcome_metrics.insert("Trace blob versioned hash".to_string(), trace_hash.clone());
+    }
+    if let Some(input_hash) = &resolution.divergence.input_blob_versioned_hash {
+        outcome_metrics.insert("Input blob versioned hash".to_string(), input_hash.clone());
+    }
 
     steps.push(StepOutput {
         key: "outcome".to_string(),
@@ -531,16 +600,20 @@ fn build_claim_metrics(claim_result: &shared::claimer::ClaimResult) -> HashMap<S
         claim_result.challenge_deadline.to_string(),
     );
     m.insert(
-        "Trace tx hash".to_string(),
-        claim_result.trace_tx_hash.clone(),
+        "Input blob tx hash".to_string(),
+        claim_result.input_blob_tx_hash.clone(),
     );
     m.insert(
-        "Trace payload bytes".to_string(),
-        claim_result.trace_payload_bytes.to_string(),
+        "Input blob versioned hash".to_string(),
+        claim_result.input_blob_versioned_hash.clone(),
     );
     m.insert(
-        "Trace codec id".to_string(),
-        claim_result.trace_codec_id.to_string(),
+        "Trace blob tx hash".to_string(),
+        claim_result.trace_blob_tx_hash.clone(),
+    );
+    m.insert(
+        "Trace blob versioned hash".to_string(),
+        claim_result.trace_blob_versioned_hash.clone(),
     );
     m
 }
@@ -551,7 +624,8 @@ fn build_summary(
     exec_time_ms: Option<u64>,
     trace_size_bytes: Option<u64>,
     trace_commitment_size_bytes: Option<u64>,
-    da_publication: &Option<shared::da::TracePublication>,
+    input_publication: &Option<shared::da::BlobPublication>,
+    trace_publication: &Option<shared::da::BlobPublication>,
     claim_result: &shared::claimer::ClaimResult,
     resolution: &shared::challenger::AuditResolution,
     outcome_status: &str,
@@ -562,9 +636,18 @@ fn build_summary(
         exec_time_ms,
         trace_size_bytes,
         trace_commitment_size_bytes,
-        da_gas: da_publication
-            .as_ref()
-            .map(|publication| publication.gas_used),
+        da_gas: Some(
+            input_publication
+                .as_ref()
+                .map(|publication| publication.total_gas_used)
+                .unwrap_or(0)
+                .saturating_add(
+                    trace_publication
+                        .as_ref()
+                        .map(|publication| publication.total_gas_used)
+                        .unwrap_or(0),
+                ),
+        ),
         claim_gas: claim_result.gas_used,
         replay_time_ms: Some(resolution.replay_time_ms),
         fraud_proof_time_ms: None,
@@ -575,8 +658,9 @@ fn build_summary(
             reason: resolution.divergence.reason.clone(),
             first_divergence_index: resolution.divergence.first_divergence_index,
             trace_fetch_status: resolution.divergence.trace_fetch_status.clone(),
-            trace_tx_hash: resolution.divergence.trace_tx_hash.clone(),
-            trace_payload_bytes: resolution.divergence.trace_payload_bytes,
+            input_fetch_status: resolution.divergence.input_fetch_status.clone(),
+            input_blob_versioned_hash: resolution.divergence.input_blob_versioned_hash.clone(),
+            trace_blob_versioned_hash: resolution.divergence.trace_blob_versioned_hash.clone(),
         }),
         total_time_ms,
         outcome: outcome_status.to_string(),
@@ -607,11 +691,18 @@ fn build_summary(
         } else {
             None
         },
+        input_blob_tx_hash: if is_l2 {
+            Some(claim_result.input_blob_tx_hash.clone())
+        } else {
+            None
+        },
         input_blob_versioned_hash: if is_l2 {
             Some(claim_result.input_blob_versioned_hash.clone())
         } else {
             None
         },
+        trace_blob_tx_hash: Some(claim_result.trace_blob_tx_hash.clone()),
+        trace_blob_versioned_hash: Some(claim_result.trace_blob_versioned_hash.clone()),
         bond_amount: if is_l2 {
             Some(claim_result.bond_amount.clone())
         } else {

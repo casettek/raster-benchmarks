@@ -536,6 +536,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d47b637369245d2dafef84b223b1ff5ea59e6cd3a98d2d3516e32788a0b216df"
 dependencies = [
  "alloy-primitives",
+ "alloy-rpc-types-engine",
  "alloy-rpc-types-eth",
  "alloy-serde",
  "serde",
@@ -4803,7 +4804,6 @@ dependencies = [
  "hex",
  "raster-backend",
  "raster-core",
- "rayon",
  "risc0-build",
  "risc0-zkvm",
  "serde",
@@ -6100,6 +6100,7 @@ name = "shared"
 version = "0.1.0"
 dependencies = [
  "alloy",
+ "base64",
  "eyre",
  "raster-core",
  "serde",
@@ -7442,6 +7443,7 @@ dependencies = [
  "alloy-primitives",
  "alloy-rlp",
  "alloy-rpc-types-engine",
+ "base64",
  "kona-executor",
  "kona-genesis",
  "kona-mpt",
@@ -7641,8 +7643,3 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
-
-[[patch.unused]]
-name = "cc"
-version = "1.0.79"
-source = "git+https://github.com/rust-lang/cc-rs?rev=e5bbdfa#e5bbdfa1fa468c028cb38fee6c35a3cf2e5a2736"

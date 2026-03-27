@@ -77,9 +77,18 @@ pub struct SummaryOutput {
     /// keccak256(concat(tracked tx raw bytes)) (hex).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch_hash: Option<String>,
-    /// EIP-4844 blob versioned hash captured at submit time (hex, zero on Anvil).
+    /// Canonical input blob manifest tx hash (hex).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_blob_tx_hash: Option<String>,
+    /// Canonical input blob manifest versioned hash (hex).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_blob_versioned_hash: Option<String>,
+    /// Trace blob manifest tx hash (hex).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_blob_tx_hash: Option<String>,
+    /// Trace blob manifest versioned hash (hex).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_blob_versioned_hash: Option<String>,
     /// Claimer bond amount in wei (decimal string).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bond_amount: Option<String>,
@@ -97,6 +106,7 @@ pub struct DivergenceSummary {
     pub reason: String,
     pub first_divergence_index: Option<u64>,
     pub trace_fetch_status: String,
-    pub trace_tx_hash: Option<String>,
-    pub trace_payload_bytes: Option<u32>,
+    pub input_fetch_status: Option<String>,
+    pub input_blob_versioned_hash: Option<String>,
+    pub trace_blob_versioned_hash: Option<String>,
 }

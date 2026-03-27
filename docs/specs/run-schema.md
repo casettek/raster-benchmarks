@@ -170,7 +170,10 @@ Note: the L2 lifecycle does not include a separate `trace` step — trace artifa
 | `start_block` | `u64` | yes | First L2 block in the claimed range. L2 only. |
 | `end_block` | `u64` | yes | Last L2 block in the claimed range. L2 only. |
 | `batch_hash` | `string` | yes | keccak256 over tracked tx bytes (hex). L2 only. |
-| `input_blob_versioned_hash` | `string` | yes | EIP-4844 blob versioned hash captured at submit time (hex, zero on Anvil). L2 only. |
+| `input_blob_tx_hash` | `string` | yes | Input-package manifest publication tx hash (hex). L2 only. |
+| `input_blob_versioned_hash` | `string` | yes | Input-package manifest blob versioned hash (hex). L2 only. |
+| `trace_blob_tx_hash` | `string` | yes | Trace-commitment manifest publication tx hash (hex). |
+| `trace_blob_versioned_hash` | `string` | yes | Trace-commitment manifest blob versioned hash (hex). |
 | `bond_amount` | `string` | yes | Claimer bond amount in wei (decimal string). L2 only. |
 | `challenge_deadline` | `u64` | yes | Challenge deadline as unix timestamp. L2 only. |
 | `challenge_period_seconds` | `u64` | yes | Challenge period duration in seconds. L2 only. |
@@ -184,9 +187,10 @@ Nullable fields are serialized as JSON `null` when not applicable. L2 claim meta
 | `detected` | `bool` | no | Whether replay output diverged from claimed output |
 | `reason` | `string` | no | Human-readable replay/audit decision reason |
 | `first_divergence_index` | `u64` | yes | First divergence index when trace localization is available |
-| `trace_fetch_status` | `string` | no | `"fetched"` |
-| `trace_tx_hash` | `string` | yes | Pointer hash used for conditional trace fetch |
-| `trace_payload_bytes` | `u32` | yes | Pointer payload size validated during trace fetch |
+| `trace_fetch_status` | `string` | no | Trace-blob fetch status (`"fetched"` in the current blob-backed flow) |
+| `input_fetch_status` | `string` | yes | Input-package fetch status for L2 audit |
+| `input_blob_versioned_hash` | `string` | yes | Input-package manifest blob versioned hash used for audit |
+| `trace_blob_versioned_hash` | `string` | yes | Trace-commitment manifest blob versioned hash used for audit |
 
 ## File naming convention
 

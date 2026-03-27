@@ -4,5 +4,6 @@ pub mod claimer;
 pub mod contract;
 pub mod da;
 pub mod deploy;
+pub mod input_package;
 pub mod raster_workload;
 pub mod run;

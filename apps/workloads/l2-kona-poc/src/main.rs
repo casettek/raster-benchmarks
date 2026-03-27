@@ -3,7 +3,8 @@ extern crate alloc;
 mod chunk_driver;
 mod chunk_plan;
 
-use std::env;
+use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -12,6 +13,7 @@ use alloy_op_evm::OpEvmFactory;
 use alloy_primitives::{keccak256, Address, Bytes, FixedBytes, B256};
 use alloy_rlp::Decodable;
 use alloy_rpc_types_engine::PayloadAttributes;
+use base64::Engine;
 use kona_executor::{StatelessL2Builder, TrieDBProvider};
 use kona_genesis::RollupConfig;
 use kona_mpt::{NoopTrieHinter, TrieNode, TrieProvider};
@@ -109,6 +111,19 @@ struct FixtureInput {
     gas_limit: u64,
     fee_recipient: String,
     batch_hash: String,
+    #[serde(default)]
+    inline_assets: Option<InlineAssets>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct InlineAssets {
+    encoding: String,
+    files: BTreeMap<String, InlineAssetFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct InlineAssetFile {
+    bytes_b64: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -459,10 +474,13 @@ fn ensure_finalized_chunk_matches_reference(
 // ---------------------------------------------------------------------------
 
 fn load_execution_context(fixture: &FixtureInput) -> Result<LoadedExecutionContext> {
-    let rollup_path = resolve_ref_path(&fixture.pre_checkpoint.rollup_config_ref);
+    let ref_root = input_ref_root(fixture)?;
+    let rollup_path =
+        resolve_ref_path_from_root(&ref_root, &fixture.pre_checkpoint.rollup_config_ref);
     let rollup_config = load_rollup_config(&rollup_path)?;
 
-    let bundle_path = resolve_ref_path(&fixture.pre_checkpoint.witness_bundle_ref);
+    let bundle_path =
+        resolve_ref_path_from_root(&ref_root, &fixture.pre_checkpoint.witness_bundle_ref);
     let bundle = load_witness_bundle(&bundle_path)?;
     let kv_refs = bundle
         .kv_store_refs
@@ -470,9 +488,9 @@ fn load_execution_context(fixture: &FixtureInput) -> Result<LoadedExecutionConte
         .unwrap_or_else(|| vec![bundle.kv_store_ref.clone()]);
     let kv_paths = kv_refs
         .into_iter()
-        .map(|value| resolve_ref_path(&value))
+        .map(|value| resolve_ref_path_from_root(&ref_root, &value))
         .collect::<Vec<_>>();
-    validate_witness_package(fixture, &bundle, &bundle_path, &kv_paths)?;
+    validate_witness_package(fixture, &bundle, &bundle_path, &kv_paths, &ref_root)?;
 
     let provider = DiskTrieNodeProvider::open_many(&kv_paths)?;
     let parent_header: Header = serde_json::from_value(bundle.parent_header)?;
@@ -682,13 +700,14 @@ fn validate_witness_package(
     bundle: &WitnessBundle,
     bundle_path: &Path,
     kv_paths: &[PathBuf],
+    ref_root: &Path,
 ) -> Result<()> {
     let manifest_ref = bundle.closure_manifest_ref.as_deref().ok_or_else(|| {
         WorkloadError::InvalidFixture(
             "witness bundle missing closure_manifest_ref for strict package validation".to_string(),
         )
     })?;
-    let manifest_path = resolve_ref_path(manifest_ref);
+    let manifest_path = resolve_ref_path_from_root(ref_root, manifest_ref);
     ensure_fixture_path(&manifest_path, "closure manifest")?;
 
     for path in kv_paths {
@@ -696,7 +715,7 @@ fn validate_witness_package(
     }
 
     let manifest = load_witness_closure_manifest(&manifest_path)?;
-    validate_witness_closure_manifest(fixture, bundle, &manifest, bundle_path)?;
+    validate_witness_closure_manifest(fixture, bundle, &manifest, bundle_path, ref_root)?;
     Ok(())
 }
 
@@ -705,8 +724,9 @@ fn validate_witness_closure_manifest(
     bundle: &WitnessBundle,
     manifest: &WitnessClosureManifest,
     bundle_path: &Path,
+    ref_root: &Path,
 ) -> Result<()> {
-    let expected_bundle_ref = normalized_ref(bundle_path);
+    let expected_bundle_ref = normalized_ref(bundle_path, ref_root);
     if manifest.witness_bundle_ref != expected_bundle_ref {
         return Err(WorkloadError::InvalidFixture(format!(
             "closure manifest witness bundle ref mismatch: expected {}, got {}",
@@ -817,11 +837,7 @@ fn missing_witness_class(error: &str) -> Option<&'static str> {
     }
 }
 
-fn resolve_ref_path(reference: &str) -> PathBuf {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("..");
+fn resolve_ref_path_from_root(root: &Path, reference: &str) -> PathBuf {
     root.join(reference)
 }
 
@@ -860,12 +876,73 @@ fn ensure_fixture_path(path: &Path, label: &str) -> Result<()> {
     }
 }
 
-fn normalized_ref(path: &Path) -> String {
-    let root = resolve_ref_path("");
+fn normalized_ref(path: &Path, root: &Path) -> String {
     path.strip_prefix(&root)
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+fn default_ref_root() -> PathBuf {
+    std::env::var("L2_POC_REF_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("..")
+        })
+}
+
+fn input_ref_root(fixture: &FixtureInput) -> Result<PathBuf> {
+    match &fixture.inline_assets {
+        Some(inline_assets) => materialize_inline_assets(inline_assets),
+        None => Ok(default_ref_root()),
+    }
+}
+
+fn materialize_inline_assets(inline_assets: &InlineAssets) -> Result<PathBuf> {
+    if inline_assets.encoding != "base64" {
+        return Err(WorkloadError::InvalidFixture(format!(
+            "unsupported inline asset encoding {}",
+            inline_assets.encoding
+        )));
+    }
+
+    let fingerprint = serde_json::to_vec(inline_assets)
+        .map_err(WorkloadError::from)
+        .map(|bytes| alloy_primitives::keccak256(bytes))?;
+    let root = std::env::temp_dir()
+        .join("raster-benchmarks-l2-inputs")
+        .join(format!("{fingerprint:#x}"));
+
+    if root.exists() {
+        return Ok(root);
+    }
+
+    for (relative_path, asset) in &inline_assets.files {
+        let absolute_path = root.join(relative_path);
+        if let Some(parent) = absolute_path.parent() {
+            fs::create_dir_all(parent).map_err(|source| WorkloadError::Io {
+                path: parent.display().to_string(),
+                source,
+            })?;
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&asset.bytes_b64)
+            .map_err(|_| {
+                WorkloadError::InvalidFixture(format!(
+                    "invalid base64 for inline asset {}",
+                    relative_path
+                ))
+            })?;
+        fs::write(&absolute_path, bytes).map_err(|source| WorkloadError::Io {
+            path: absolute_path.display().to_string(),
+            source,
+        })?;
+    }
+
+    Ok(root)
 }
 
 fn bundle_kv_refs(bundle: &WitnessBundle) -> Vec<String> {

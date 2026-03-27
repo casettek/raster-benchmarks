@@ -14,6 +14,13 @@ This repo is local-first. Phase 0 requires deterministic local prerequisites bef
 - Record `forge --version` used for contract build/test runs.
 - Record `anvil --version` used for benchmark runs.
 - Record exact Raster revision SHA and lockfile hash in run metadata (`raster_pin` block).
+- Blob-backed local dev is pinned against Foundry/Anvil `1.5.1-stable`
+  (`b0a9dd9ceda36f63e2326ce530c10e6916f4b8a2`) with Anvil started using
+  `--hardfork cancun`.
+- On Linux environments without a full clang header setup, rebuilding
+  `workload-l2-kona-poc` may require:
+  `BINDGEN_EXTRA_CLANG_ARGS='-I/usr/lib/gcc/x86_64-linux-gnu/13/include -I/usr/include/x86_64-linux-gnu -I/usr/include'`
+  so `librocksdb-sys` bindgen can find builtin C headers like `stdbool.h`.
 
 ## Baseline startup check
 

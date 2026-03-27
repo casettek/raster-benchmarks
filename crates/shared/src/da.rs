@@ -1,147 +1,257 @@
+use std::fs;
 use std::path::PathBuf;
 
-use alloy::primitives::{Address, B256, Bytes};
+use alloy::consensus::{SidecarBuilder, SidecarCoder, SimpleCoder};
+use alloy::eips::eip4844::Blob;
+use alloy::network::{TransactionBuilder, TransactionBuilder4844};
+use alloy::primitives::{Address, B256, keccak256};
 use alloy::providers::Provider;
-use alloy::sol_types::SolCall;
-use eyre::{Context, Result};
-use serde::Serialize;
+use alloy::rpc::types::TransactionRequest;
+use eyre::{Context, Result, eyre};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::anvil::AnvilProvider;
-use crate::contract::IClaimVerifier;
 
-pub const TRACE_CODEC_NDJSON_V1: u8 = 1;
 pub const TRACE_CODEC_COMMITMENT_JSON_V1: u8 = 2;
+pub const INPUT_CODEC_JSON_V1: u8 = 10;
+pub const INPUT_ARTIFACT_KIND: &str = "input-package";
+pub const TRACE_ARTIFACT_KIND: &str = "trace-commitment";
+const BLOB_SINK_ADDRESS: Address = Address::ZERO;
+const SINGLE_BLOB_PAYLOAD_BYTES: usize = 120 * 1024;
+const MANIFEST_SCHEMA_VERSION: u8 = 1;
 
-#[derive(Debug, Clone, Serialize)]
-pub struct TracePublication {
-    pub trace_tx_hash: String,
-    pub payload_hash: String,
-    pub payload_bytes: u32,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlobPublication {
+    pub kind: String,
     pub codec_id: u8,
-    pub gas_used: u64,
+    pub manifest_tx_hash: String,
+    pub manifest_blob_versioned_hash: String,
+    pub payload_hash: String,
+    pub payload_bytes: u64,
+    pub chunk_count: u32,
+    pub total_gas_used: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct TracePointerIndex {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlobChunkRef {
+    pub tx_hash: String,
+    pub blob_versioned_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlobManifest {
+    pub schema_version: u8,
+    pub kind: String,
+    pub codec_id: u8,
+    pub payload_hash: String,
+    pub payload_bytes: u64,
+    pub chunks: Vec<BlobChunkRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunBlobIndex {
     pub run_id: String,
-    pub trace_tx_hash: String,
-    pub payload_hash: String,
-    pub payload_bytes: u32,
-    pub codec_id: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<BlobManifestIndex>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace: Option<BlobManifestIndex>,
 }
 
-pub async fn publish_trace(
-    provider: &AnvilProvider,
-    contract_address: Address,
-    payload: Vec<u8>,
-    codec_id: u8,
-) -> Result<TracePublication> {
-    let payload_bytes =
-        u32::try_from(payload.len()).wrap_err("trace payload too large for u32 length")?;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlobManifestIndex {
+    pub publication: BlobPublication,
+    pub chunks: Vec<BlobChunkRef>,
+}
 
-    let contract = IClaimVerifier::new(contract_address, provider);
-    let pending = contract
-        .publishTrace(Bytes::from(payload), codec_id)
-        .send()
-        .await?;
+pub async fn publish_input_package(
+    provider: &AnvilProvider,
+    payload: Vec<u8>,
+) -> Result<(BlobPublication, BlobManifest)> {
+    publish_blob_artifact(provider, INPUT_ARTIFACT_KIND, INPUT_CODEC_JSON_V1, payload).await
+}
+
+pub async fn publish_trace_commitment(
+    provider: &AnvilProvider,
+    payload: Vec<u8>,
+) -> Result<(BlobPublication, BlobManifest)> {
+    publish_blob_artifact(provider, TRACE_ARTIFACT_KIND, TRACE_CODEC_COMMITMENT_JSON_V1, payload)
+        .await
+}
+
+pub fn persist_blob_index(
+    run_id: &str,
+    input: Option<(&BlobPublication, &BlobManifest)>,
+    trace: Option<(&BlobPublication, &BlobManifest)>,
+) -> Result<PathBuf> {
+    let index_dir = PathBuf::from("runs").join("blob-index");
+    fs::create_dir_all(&index_dir).wrap_err("failed to create runs/blob-index")?;
+
+    let index = RunBlobIndex {
+        run_id: run_id.to_string(),
+        input: input.map(|(publication, manifest)| BlobManifestIndex {
+            publication: publication.clone(),
+            chunks: manifest.chunks.clone(),
+        }),
+        trace: trace.map(|(publication, manifest)| BlobManifestIndex {
+            publication: publication.clone(),
+            chunks: manifest.chunks.clone(),
+        }),
+    };
+
+    let path = index_dir.join(format!("{run_id}.json"));
+    let json = serde_json::to_string_pretty(&index)?;
+    fs::write(&path, json.as_bytes()).wrap_err("failed to write blob index file")?;
+    Ok(path)
+}
+
+pub async fn fetch_blob_artifact(
+    provider: &AnvilProvider,
+    manifest_blob_versioned_hash: B256,
+) -> Result<(BlobManifest, Vec<u8>)> {
+    let manifest_bytes = fetch_blob_bytes_by_hash(provider, manifest_blob_versioned_hash).await?;
+    let manifest: BlobManifest = serde_json::from_slice(&manifest_bytes)
+        .wrap_err("failed to decode blob manifest payload")?;
+
+    let mut payload = Vec::with_capacity(manifest.payload_bytes as usize);
+    for chunk in &manifest.chunks {
+        let hash = parse_blob_versioned_hash(&chunk.blob_versioned_hash)?;
+        let bytes = fetch_blob_bytes_by_hash(provider, hash).await?;
+        payload.extend_from_slice(&bytes);
+    }
+    payload.truncate(manifest.payload_bytes as usize);
+
+    let observed_payload_hash = format!("0x{}", alloy::hex::encode(Sha256::digest(&payload)));
+    if observed_payload_hash != manifest.payload_hash {
+        return Err(eyre!(
+            "blob artifact payload hash mismatch: expected {}, got {}",
+            manifest.payload_hash,
+            observed_payload_hash
+        ));
+    }
+
+    Ok((manifest, payload))
+}
+
+pub fn parse_blob_versioned_hash(hash: &str) -> Result<B256> {
+    hash.parse::<B256>()
+        .wrap_err("invalid blob versioned hash in publication pointer")
+}
+
+async fn publish_blob_artifact(
+    provider: &AnvilProvider,
+    kind: &str,
+    codec_id: u8,
+    payload: Vec<u8>,
+) -> Result<(BlobPublication, BlobManifest)> {
+    let payload_hash = format!("0x{}", alloy::hex::encode(Sha256::digest(&payload)));
+    let payload_bytes =
+        u64::try_from(payload.len()).wrap_err("blob artifact payload too large for u64 length")?;
+
+    let mut chunks = Vec::new();
+    let mut total_gas_used = 0u64;
+    for bytes in payload.chunks(SINGLE_BLOB_PAYLOAD_BYTES) {
+        let chunk = publish_single_blob(provider, bytes.to_vec()).await?;
+        total_gas_used = total_gas_used.saturating_add(chunk.gas_used);
+        chunks.push(BlobChunkRef {
+            tx_hash: chunk.tx_hash,
+            blob_versioned_hash: chunk.blob_versioned_hash,
+        });
+    }
+
+    let manifest = BlobManifest {
+        schema_version: MANIFEST_SCHEMA_VERSION,
+        kind: kind.to_string(),
+        codec_id,
+        payload_hash: payload_hash.clone(),
+        payload_bytes,
+        chunks,
+    };
+
+    let manifest_payload = serde_json::to_vec_pretty(&manifest)?;
+    if manifest_payload.len() > SINGLE_BLOB_PAYLOAD_BYTES {
+        return Err(eyre!(
+            "blob manifest too large to fit in a single blob: {} bytes",
+            manifest_payload.len()
+        ));
+    }
+
+    let manifest_chunk = publish_single_blob(provider, manifest_payload).await?;
+    total_gas_used = total_gas_used.saturating_add(manifest_chunk.gas_used);
+
+    Ok((
+        BlobPublication {
+            kind: kind.to_string(),
+            codec_id,
+            manifest_tx_hash: manifest_chunk.tx_hash,
+            manifest_blob_versioned_hash: manifest_chunk.blob_versioned_hash,
+            payload_hash,
+            payload_bytes,
+            chunk_count: u32::try_from(manifest.chunks.len())
+                .wrap_err("too many blob chunks for u32 count")?,
+            total_gas_used,
+        },
+        manifest,
+    ))
+}
+
+async fn publish_single_blob(provider: &AnvilProvider, payload: Vec<u8>) -> Result<SingleBlobTx> {
+    let sidecar = SidecarBuilder::<SimpleCoder>::from_slice(&payload)
+        .build()
+        .wrap_err("failed to build blob sidecar")?;
+    let versioned_hashes: Vec<_> = sidecar.versioned_hashes().collect();
+    if versioned_hashes.len() != 1 {
+        return Err(eyre!(
+            "expected a single blob chunk, got {} blobs",
+            versioned_hashes.len()
+        ));
+    }
+
+    let tx = TransactionRequest::default()
+        .with_to(BLOB_SINK_ADDRESS)
+        .with_blob_sidecar(sidecar);
+
+    let pending = provider.send_transaction(tx).await?;
     let receipt = pending.get_receipt().await?;
 
-    let published = receipt
-        .inner
-        .logs()
-        .iter()
-        .find_map(|log| {
-            log.log_decode::<IClaimVerifier::TracePublished>()
-                .ok()
-                .map(|decoded| decoded.inner)
-        })
-        .ok_or_else(|| eyre::eyre!("TracePublished event not found in receipt"))?;
-
-    Ok(TracePublication {
-        trace_tx_hash: format!("{}", receipt.transaction_hash),
-        payload_hash: format!("0x{}", alloy::hex::encode(published.payloadHash)),
-        payload_bytes,
-        codec_id: published.codecId,
+    Ok(SingleBlobTx {
+        tx_hash: format!("{}", receipt.transaction_hash),
+        blob_versioned_hash: format!("0x{}", alloy::hex::encode(versioned_hashes[0])),
         gas_used: receipt.gas_used,
     })
 }
 
-pub fn persist_trace_index(run_id: &str, publication: &TracePublication) -> Result<PathBuf> {
-    let index_dir = PathBuf::from("runs").join("blob-index");
-    std::fs::create_dir_all(&index_dir).wrap_err("failed to create runs/blob-index")?;
+async fn fetch_blob_bytes_by_hash(provider: &AnvilProvider, blob_hash: B256) -> Result<Vec<u8>> {
+    let raw_blob: String = provider
+        .raw_request(
+            "anvil_getBlobByHash".into(),
+            [serde_json::Value::String(format!("0x{}", alloy::hex::encode(blob_hash)))],
+        )
+        .await
+        .wrap_err("failed to fetch blob bytes from Anvil")?;
 
-    let index = TracePointerIndex {
-        run_id: run_id.to_string(),
-        trace_tx_hash: publication.trace_tx_hash.clone(),
-        payload_hash: publication.payload_hash.clone(),
-        payload_bytes: publication.payload_bytes,
-        codec_id: publication.codec_id,
-    };
-    let json = serde_json::to_string_pretty(&index)?;
-
-    let path = index_dir.join(format!("{run_id}.json"));
-    std::fs::write(&path, json.as_bytes()).wrap_err("failed to write blob index file")?;
-    Ok(path)
+    let blob_bytes = alloy::hex::decode(raw_blob.trim_start_matches("0x"))
+        .wrap_err("blob response was not valid hex")?;
+    let blob = Blob::try_from(blob_bytes.as_slice())
+        .map_err(|_| eyre!("blob response had invalid length: {}", blob_bytes.len()))?;
+    let decoded = SimpleCoder::default()
+        .decode_all(&[blob])
+        .ok_or_else(|| eyre!("failed to decode blob payload with SimpleCoder"))?;
+    let payload = decoded
+        .into_iter()
+        .next()
+        .ok_or_else(|| eyre!("blob payload decoded to an empty chunk set"))?;
+    Ok(payload)
 }
 
-pub fn parse_trace_tx_hash(hash: &str) -> Result<B256> {
-    hash.parse::<B256>()
-        .wrap_err("invalid trace tx hash in publication pointer")
+#[derive(Debug)]
+struct SingleBlobTx {
+    tx_hash: String,
+    blob_versioned_hash: String,
+    gas_used: u64,
 }
 
-pub async fn fetch_trace_payload_from_tx(
-    provider: &AnvilProvider,
-    contract_address: Address,
-    trace_tx_hash: B256,
-    expected_payload_bytes: u32,
-    expected_codec_id: u8,
-) -> Result<Vec<u8>> {
-    let tx = provider
-        .get_transaction_by_hash(trace_tx_hash)
-        .await?
-        .ok_or_else(|| eyre::eyre!("trace publication tx not found for hash {trace_tx_hash}"))?;
-
-    let tx_json = serde_json::to_value(&tx)?;
-    let to_hex = tx_json
-        .get("to")
-        .and_then(|value| value.as_str())
-        .ok_or_else(|| eyre::eyre!("trace publication tx missing destination address"))?;
-    let to_address: Address = to_hex
-        .parse()
-        .wrap_err("trace publication tx has invalid destination address")?;
-    if to_address != contract_address {
-        return Err(eyre::eyre!(
-            "trace publication tx {} does not target expected contract {}",
-            trace_tx_hash,
-            contract_address
-        ));
-    }
-
-    let input_hex = tx_json
-        .get("input")
-        .and_then(|value| value.as_str())
-        .ok_or_else(|| eyre::eyre!("trace publication tx missing input calldata"))?;
-    let calldata = alloy::hex::decode(input_hex.trim_start_matches("0x"))
-        .wrap_err("trace publication tx calldata is not valid hex")?;
-
-    let call = IClaimVerifier::publishTraceCall::abi_decode(&calldata)
-        .wrap_err("failed to decode publishTrace calldata")?;
-
-    if call.codecId != expected_codec_id {
-        return Err(eyre::eyre!(
-            "trace codec mismatch: expected {}, got {}",
-            expected_codec_id,
-            call.codecId
-        ));
-    }
-
-    if call.payload.len() != expected_payload_bytes as usize {
-        return Err(eyre::eyre!(
-            "trace payload size mismatch: expected {}, got {}",
-            expected_payload_bytes,
-            call.payload.len()
-        ));
-    }
-
-    Ok(call.payload.to_vec())
+#[allow(dead_code)]
+fn _keccak_hex(payload: &[u8]) -> String {
+    format!("0x{}", alloy::hex::encode(keccak256(payload)))
 }

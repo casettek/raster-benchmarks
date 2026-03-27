@@ -45,7 +45,7 @@ fn honest_fixture_matches_expected_replay_contract() {
 
     let divergence = run.summary.divergence.expect("missing divergence summary");
     assert!(!divergence.detected);
-    assert_eq!(divergence.trace_fetch_status, "skipped");
+    assert_eq!(divergence.trace_fetch_status, "fetched");
     assert_eq!(run.summary.outcome, "settled");
 }
 
@@ -124,7 +124,10 @@ fn l2_honest_fixture_has_l2_summary_metadata() {
     // Honest = settled with no divergence
     let divergence = run.summary.divergence.expect("missing divergence");
     assert!(!divergence.detected);
-    assert_eq!(divergence.trace_fetch_status, "skipped");
+    assert_eq!(divergence.trace_fetch_status, "fetched");
+    assert_eq!(divergence.input_fetch_status.as_deref(), Some("fetched"));
+    assert!(run.summary.input_blob_tx_hash.is_some());
+    assert!(run.summary.trace_blob_versioned_hash.is_some());
     assert_eq!(run.summary.outcome, "settled");
 }
 
@@ -148,7 +151,8 @@ fn l2_dishonest_fixture_has_divergence_and_trace_fetch() {
     let divergence = run.summary.divergence.expect("missing divergence");
     assert!(divergence.detected);
     assert_eq!(divergence.trace_fetch_status, "fetched");
-    assert!(divergence.first_divergence_index.is_some());
+    assert_eq!(divergence.input_fetch_status.as_deref(), Some("fetched"));
+    assert!(divergence.first_divergence_index.is_none());
     assert_eq!(run.summary.outcome, "slashed");
 
     // Audit step should show divergence detected
@@ -191,6 +195,10 @@ fn l2_honest_fixture_prepare_step_has_batch_metadata() {
     assert!(
         prepare.metrics.contains_key("Block range"),
         "missing Block range metric"
+    );
+    assert_eq!(
+        prepare.metrics.get("Input blob chunks").map(String::as_str),
+        Some("9")
     );
 }
 
