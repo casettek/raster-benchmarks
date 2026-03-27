@@ -251,7 +251,7 @@ pointer, but that pointer is outside the execution-program boundary.
 
 ## Blob-backed input package contract
 
-- The harness publishes a canonical input-package tarball before claim
+- The harness publishes one canonical input-package JSON payload before claim
   submission.
 - That package contains the transaction batch input, fixture JSON, rollup
   config, rewritten witness metadata, and only the minimum extra state/witness
@@ -259,10 +259,10 @@ pointer, but that pointer is outside the execution-program boundary.
   that batch (rather than the full vendored closure set).
 - The claim stores the input-package manifest blob versioned hash; challenger
   audit fetches that manifest, fetches its referenced chunks from Anvil, and
-  materializes the package before replay.
-- The workload remains blob-agnostic: it still receives ordinary fixture JSON as
-  `--input`, with file refs resolved by the harness-provided materialization
-  root.
+  feeds the same canonical input-package bytes into workload replay.
+- The workload stays close to its existing fixture contract: it accepts the same
+  canonical input-package JSON bytes that were published to DA, and only the
+  workload boundary materializes inline asset files when execution needs them.
 
 ## Failure model
 

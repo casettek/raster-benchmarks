@@ -60,39 +60,29 @@ async fn main() -> Result<()> {
     eprintln!("Spawning Anvil...");
     let (_anvil, provider) = shared::anvil::spawn_anvil()?;
 
-    // 3. Publish and materialize the canonical input package for L2
-    let (input_publication, input_manifest, materialized_input_root, materialized_input_json) =
+    // 3. Publish the canonical input package for L2
+    let (input_publication, input_manifest, input_package_json) =
         if is_l2 {
             eprintln!("Publishing canonical input package to Anvil blob storage...");
             let package_bytes = input_package::build_canonical_input_package()?;
+            let input_package_json = String::from_utf8(package_bytes.clone())
+                .map_err(|_| eyre::eyre!("input package bytes were not valid UTF-8 json"))?;
             let (publication, manifest) = shared::da::publish_input_package(&provider, package_bytes).await?;
-            let (_fetched_manifest, fetched_package) = shared::da::fetch_blob_artifact(
-                &provider,
-                shared::da::parse_blob_versioned_hash(&publication.manifest_blob_versioned_hash)?,
-            )
-            .await?;
-            let materialized_root = PathBuf::from("runs")
-                .join("artifacts")
-                .join(&run_id)
-                .join("input-package");
-            input_package::materialize_input_package(&fetched_package, &materialized_root)?;
-            let fixture_json = input_package::canonical_fixture_json_from_root(&materialized_root)?;
             (
                 Some(publication),
                 Some(manifest),
-                Some(materialized_root),
-                Some(fixture_json),
+                Some(input_package_json),
             )
         } else {
-            (None, None, None, None)
+            (None, None, None)
         };
 
     // 4. Execute Raster workload when requested
     let raster_workload_result = raster_workload::run_with_input_root(
         &cli.workload,
         &run_id,
-        materialized_input_json,
-        materialized_input_root.as_deref(),
+        input_package_json,
+        None,
     )?;
 
     // 5. Deploy contract

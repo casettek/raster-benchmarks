@@ -67,10 +67,14 @@ pub fn run_with_input_root(
 
     let start = Instant::now();
     let mut command = Command::new(spec.bin_path);
-    command
-        .current_dir(spec.run_dir)
-        .arg("--input")
-        .arg(input_json);
+    command.current_dir(spec.run_dir);
+
+    if workload == "l2-kona-poc" && input_json.len() > 120_000 {
+        let input_path = write_large_input_file(run_id, &input_json)?;
+        command.arg("--input-file").arg(input_path);
+    } else {
+        command.arg("--input").arg(input_json);
+    }
 
     if workload == "l2-kona-poc" && let Some(root) = l2_ref_root {
         command.env("L2_POC_REF_ROOT", root);
@@ -152,6 +156,15 @@ pub fn run_with_input_root(
         trace_commitment_path: trace_commitment_path.to_string_lossy().to_string(),
         trace_aggregate_commitment: trace_commitment_artifact.aggregate_commitment,
     }))
+}
+
+fn write_large_input_file(run_id: &str, input_json: &str) -> Result<PathBuf> {
+    let artifact_dir = PathBuf::from("runs").join("artifacts").join(run_id);
+    std::fs::create_dir_all(&artifact_dir).wrap_err("failed to create input artifact directory")?;
+    let input_path = artifact_dir.join("input-package.json");
+    std::fs::write(&input_path, input_json.as_bytes())
+        .wrap_err("failed to write large workload input file")?;
+    std::fs::canonicalize(&input_path).wrap_err("failed to canonicalize workload input path")
 }
 
 fn workload_spec(workload: &str) -> Result<WorkloadSpec> {

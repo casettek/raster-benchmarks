@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 use crate::anvil::AnvilProvider;
 
 pub const TRACE_CODEC_COMMITMENT_JSON_V1: u8 = 2;
-pub const INPUT_CODEC_TAR_V1: u8 = 10;
+pub const INPUT_CODEC_JSON_V1: u8 = 10;
 pub const INPUT_ARTIFACT_KIND: &str = "input-package";
 pub const TRACE_ARTIFACT_KIND: &str = "trace-commitment";
 const BLOB_SINK_ADDRESS: Address = Address::ZERO;
@@ -68,7 +68,7 @@ pub async fn publish_input_package(
     provider: &AnvilProvider,
     payload: Vec<u8>,
 ) -> Result<(BlobPublication, BlobManifest)> {
-    publish_blob_artifact(provider, INPUT_ARTIFACT_KIND, INPUT_CODEC_TAR_V1, payload).await
+    publish_blob_artifact(provider, INPUT_ARTIFACT_KIND, INPUT_CODEC_JSON_V1, payload).await
 }
 
 pub async fn publish_trace_commitment(

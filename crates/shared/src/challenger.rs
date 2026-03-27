@@ -1,5 +1,4 @@
-use std::path::PathBuf;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 use alloy::primitives::{Address, B256, FixedBytes, U256};
 use alloy::providers::Provider;
@@ -263,18 +262,13 @@ pub async fn audit_claim(
     };
 
     let mut input_json_override = None;
-    let mut l2_ref_root = None;
     if workload == "l2-kona-poc" && input_blob_versioned_hash != B256::ZERO {
         let (_manifest, package_bytes) =
             crate::da::fetch_blob_artifact(provider, input_blob_versioned_hash).await?;
-        let materialized_root = audit_materialized_root(workload, claim_id);
-        crate::input_package::materialize_input_package(&package_bytes, &materialized_root)?;
-        input_json_override = Some(crate::input_package::canonical_fixture_json_from_root(
-            &materialized_root,
-        )?);
-        l2_ref_root = Some(crate::input_package::canonical_fixture_ref_root(
-            &materialized_root,
-        ));
+        input_json_override = Some(
+            String::from_utf8(package_bytes)
+                .map_err(|_| eyre!("fetched input package bytes were not valid UTF-8 json"))?,
+        );
         divergence.input_fetch_status = Some("fetched".to_string());
     } else if workload == "l2-kona-poc" {
         divergence.input_fetch_status = Some("missing".to_string());
@@ -284,7 +278,7 @@ pub async fn audit_claim(
         workload,
         &claim_id.to_string(),
         input_json_override,
-        l2_ref_root.as_deref(),
+        None,
     )?;
     let (_trace_manifest, fetched_payload) =
         crate::da::fetch_blob_artifact(provider, trace_blob_versioned_hash).await?;
@@ -319,20 +313,6 @@ pub async fn audit_claim(
         challenge_deadline: claim.challengeDeadline,
         challenge_period,
     })
-}
-
-fn audit_materialized_root(workload: &str, claim_id: U256) -> PathBuf {
-    PathBuf::from("runs")
-        .join("artifacts")
-        .join(format!(
-            "audit-input-{}-{}-{}",
-            workload,
-            claim_id,
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-        ))
 }
 
 /// Finalize or challenge a claim based on a prior `AuditResult`.

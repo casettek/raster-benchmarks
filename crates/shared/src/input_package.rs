@@ -1,11 +1,11 @@
+use std::collections::BTreeMap;
 use std::fs;
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
+use base64::Engine;
 use eyre::{eyre, Context, Result};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use tar::{Archive, Builder};
 
 const FIXTURE_PATH: &str = "runs/fixtures/l2-poc-synth-fixture.json";
 const ROLLUP_CONFIG_PATH: &str = "fixtures/l2-poc/rollup-config-v1.json";
@@ -14,92 +14,85 @@ const WITNESS_MANIFEST_PATH: &str = "fixtures/l2-poc/synthetic-witness-closure-m
 
 pub fn build_canonical_input_package() -> Result<Vec<u8>> {
     let root = repo_root();
-    let mut builder = Builder::new(Vec::new());
-
     let compact_kv_refs = compact_witness_kv_refs(&root)?;
     let compact_bundle = build_compact_witness_bundle(&root, &compact_kv_refs)?;
     let compact_manifest =
         build_compact_witness_manifest(&root, &compact_kv_refs, &compact_bundle)?;
 
-    for relative in [FIXTURE_PATH, ROLLUP_CONFIG_PATH] {
-        append_path(&mut builder, &root, relative)?;
+    let mut fixture = load_json(root.join(FIXTURE_PATH))?;
+    let mut inline_assets = BTreeMap::<String, Value>::new();
+    inline_assets.insert(
+        ROLLUP_CONFIG_PATH.to_string(),
+        inline_asset_value(&fs::read(root.join(ROLLUP_CONFIG_PATH))?),
+    );
+    inline_assets.insert(
+        WITNESS_BUNDLE_PATH.to_string(),
+        inline_asset_value(&compact_bundle),
+    );
+    inline_assets.insert(
+        WITNESS_MANIFEST_PATH.to_string(),
+        inline_asset_value(&compact_manifest),
+    );
+
+    for kv_ref in compact_kv_refs {
+        append_directory_assets(&root, &kv_ref, &mut inline_assets)?;
     }
 
-    append_bytes(&mut builder, WITNESS_BUNDLE_PATH, &compact_bundle)?;
-    append_bytes(&mut builder, WITNESS_MANIFEST_PATH, &compact_manifest)?;
+    fixture["inline_assets"] = json!({
+        "encoding": "base64",
+        "files": inline_assets,
+    });
 
-    for relative in compact_kv_refs {
-        append_path(&mut builder, &root, &relative)?;
+    serde_json::to_vec_pretty(&fixture).wrap_err("failed to encode canonical input package json")
+}
+
+fn append_directory_assets(
+    root: &Path,
+    relative_dir: &str,
+    inline_assets: &mut BTreeMap<String, Value>,
+) -> Result<()> {
+    let absolute_dir = root.join(relative_dir);
+    if !absolute_dir.is_dir() {
+        return Err(eyre!(
+            "expected witness asset directory {}, but it was missing",
+            absolute_dir.display()
+        ));
     }
 
-    builder
-        .finish()
-        .wrap_err("failed to finalize input package tarball")?;
-    builder
-        .into_inner()
-        .wrap_err("failed to extract input package tar bytes")
-}
+    let mut files = fs::read_dir(&absolute_dir)
+        .wrap_err_with(|| {
+            format!(
+                "failed to read witness asset dir {}",
+                absolute_dir.display()
+            )
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    files.sort_by_key(|entry| entry.file_name());
 
-pub fn materialize_input_package(package_bytes: &[u8], destination_root: &Path) -> Result<()> {
-    fs::create_dir_all(destination_root).wrap_err_with(|| {
-        format!(
-            "failed to create input package destination {}",
-            destination_root.display()
-        )
-    })?;
-
-    let cursor = Cursor::new(package_bytes);
-    let mut archive = Archive::new(cursor);
-    archive
-        .unpack(destination_root)
-        .wrap_err("failed to extract input package tarball")
-}
-
-pub fn canonical_fixture_json_from_root(root: &Path) -> Result<String> {
-    let path = root.join(FIXTURE_PATH);
-    fs::read_to_string(&path)
-        .wrap_err_with(|| format!("failed to read materialized fixture {}", path.display()))
-}
-
-pub fn canonical_fixture_ref_root(root: &Path) -> PathBuf {
-    root.to_path_buf()
-}
-
-pub fn canonical_fixture_relative_path() -> &'static str {
-    FIXTURE_PATH
-}
-
-fn append_path(builder: &mut Builder<Vec<u8>>, root: &Path, relative: &str) -> Result<()> {
-    let absolute = root.join(relative);
-    if !absolute.exists() {
-        return Err(eyre!("missing input package entry {}", absolute.display()));
-    }
-
-    if absolute.is_dir() {
-        builder
-            .append_dir_all(relative, &absolute)
-            .wrap_err_with(|| format!("failed to append directory {}", absolute.display()))?;
-    } else {
-        builder
-            .append_path_with_name(&absolute, relative)
-            .wrap_err_with(|| format!("failed to append file {}", absolute.display()))?;
+    for entry in files {
+        let path = entry.path();
+        if path.is_file() {
+            let relative = path
+                .strip_prefix(root)
+                .wrap_err("failed to relativize witness asset path")?
+                .to_string_lossy()
+                .replace('\\', "/");
+            inline_assets.insert(relative, inline_asset_value(&fs::read(&path)?));
+        }
     }
 
     Ok(())
 }
 
-fn append_bytes(builder: &mut Builder<Vec<u8>>, relative: &str, contents: &[u8]) -> Result<()> {
-    let mut header = tar::Header::new_gnu();
-    header.set_size(u64::try_from(contents.len()).wrap_err("content length overflow")?);
-    header.set_mode(0o644);
-    header.set_cksum();
-    builder
-        .append_data(&mut header, relative, Cursor::new(contents))
-        .wrap_err_with(|| format!("failed to append generated file {relative}"))
+fn inline_asset_value(bytes: &[u8]) -> Value {
+    json!({
+        "bytes_b64": base64::engine::general_purpose::STANDARD.encode(bytes),
+    })
 }
 
 fn compact_witness_kv_refs(root: &Path) -> Result<Vec<String>> {
     let bundle = load_json(root.join(WITNESS_BUNDLE_PATH))?;
+    let fixture = load_json(root.join(FIXTURE_PATH))?;
     let refs = bundle
         .get("kv_store_refs")
         .and_then(Value::as_array)
@@ -119,10 +112,18 @@ fn compact_witness_kv_refs(root: &Path) -> Result<Vec<String>> {
         })
         .ok_or_else(|| eyre!("witness bundle missing kv store references"))?;
 
+    let start_block = fixture
+        .get("start_block")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| eyre!("fixture missing start_block"))?;
+    let preferred_suffix = format!("block-{start_block}");
     let compact_ref = refs
-        .last()
+        .iter()
+        .find(|value| value.ends_with(&preferred_suffix))
         .cloned()
+        .or_else(|| refs.last().cloned())
         .ok_or_else(|| eyre!("witness bundle did not include any kv refs"))?;
+
     Ok(vec![compact_ref])
 }
 
@@ -187,4 +188,28 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_input_package_is_json_with_inline_assets() {
+        let bytes = build_canonical_input_package().expect("input package should build");
+        let value: Value = serde_json::from_slice(&bytes).expect("package should be valid json");
+
+        assert!(value.get("transactions").is_some());
+        let inline_assets = value
+            .get("inline_assets")
+            .expect("package should include inline assets");
+        assert_eq!(
+            inline_assets.get("encoding").and_then(Value::as_str),
+            Some("base64")
+        );
+        assert!(inline_assets
+            .get("files")
+            .and_then(Value::as_object)
+            .is_some_and(|files| files.contains_key(ROLLUP_CONFIG_PATH)));
+    }
 }

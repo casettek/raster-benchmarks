@@ -345,7 +345,7 @@ async fn run_pipeline(
         }
     };
 
-    let (input_publication, input_manifest, materialized_input_root, materialized_input_json) = if is_l2 {
+    let (input_publication, input_manifest, input_package_json) = if is_l2 {
         let package_bytes = match input_package::build_canonical_input_package() {
             Ok(bytes) => bytes,
             Err(e) => {
@@ -361,6 +361,21 @@ async fn run_pipeline(
             }
         };
 
+        let input_package_json = match String::from_utf8(package_bytes.clone()) {
+            Ok(value) => value,
+            Err(_) => {
+                let _ = tx
+                    .send(Ok(Event::default().event("error").data(
+                        serde_json::to_string(&ErrorPayload {
+                            message: "Input package bytes were not valid UTF-8 JSON".to_string(),
+                        })
+                        .unwrap_or_default(),
+                    )))
+                    .await;
+                return;
+            }
+        };
+
         let (publication, manifest) = match shared::da::publish_input_package(&state.provider, package_bytes).await {
             Ok(result) => result,
             Err(e) => {
@@ -368,57 +383,6 @@ async fn run_pipeline(
                     .send(Ok(Event::default().event("error").data(
                         serde_json::to_string(&ErrorPayload {
                             message: format!("Input publication failed: {e}"),
-                        })
-                        .unwrap_or_default(),
-                    )))
-                    .await;
-                return;
-            }
-        };
-
-        let fetched_package = match shared::da::fetch_blob_artifact(
-            &state.provider,
-            shared::da::parse_blob_versioned_hash(&publication.manifest_blob_versioned_hash)
-                .expect("input blob versioned hash should parse"),
-        )
-        .await
-        {
-            Ok((_manifest, bytes)) => bytes,
-            Err(e) => {
-                let _ = tx
-                    .send(Ok(Event::default().event("error").data(
-                        serde_json::to_string(&ErrorPayload {
-                            message: format!("Failed to fetch published input package: {e}"),
-                        })
-                        .unwrap_or_default(),
-                    )))
-                    .await;
-                return;
-            }
-        };
-
-        let materialized_root = PathBuf::from("runs")
-            .join("artifacts")
-            .join(&run_id)
-            .join("input-package");
-        if let Err(e) = input_package::materialize_input_package(&fetched_package, &materialized_root) {
-            let _ = tx
-                .send(Ok(Event::default().event("error").data(
-                    serde_json::to_string(&ErrorPayload {
-                        message: format!("Failed to materialize input package: {e}"),
-                    })
-                    .unwrap_or_default(),
-                )))
-                .await;
-            return;
-        }
-        let fixture_json = match input_package::canonical_fixture_json_from_root(&materialized_root) {
-            Ok(value) => value,
-            Err(e) => {
-                let _ = tx
-                    .send(Ok(Event::default().event("error").data(
-                        serde_json::to_string(&ErrorPayload {
-                            message: format!("Failed to read materialized fixture: {e}"),
                         })
                         .unwrap_or_default(),
                     )))
@@ -469,11 +433,10 @@ async fn run_pipeline(
         (
             Some(publication),
             Some(manifest),
-            Some(materialized_root),
-            Some(fixture_json),
+            Some(input_package_json),
         )
     } else {
-        (None, None, None, None)
+        (None, None, None)
     };
 
     // --- Execute step ---
@@ -493,8 +456,8 @@ async fn run_pipeline(
     let raster_workload_result = match raster_workload::run_with_input_root(
         &workload,
         &run_id,
-        materialized_input_json,
-        materialized_input_root.as_deref(),
+        input_package_json,
+        None,
     ) {
         Ok(result) => result,
         Err(e) => {
