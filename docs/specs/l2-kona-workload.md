@@ -246,8 +246,9 @@ test fixtures, but canonical runs do not depend on external historical RPC reads
 - `endBlock = 26207960`
 - `batchHash = keccak256(concat(tx1_raw, tx2_raw, tx3_raw, tx4_raw, tx5_raw))`
 
-The claim object may additionally carry a canonical input blob/versioned-hash
-pointer, but that pointer is outside the execution-program boundary.
+The claim object may additionally carry canonical input/trace manifest blob
+versioned-hash pointers, but those pointers stay outside the execution-program
+boundary.
 
 ## Blob-backed input package contract
 
@@ -257,6 +258,9 @@ pointer, but that pointer is outside the execution-program boundary.
   config, rewritten witness metadata, and only the minimum extra state/witness
   data currently required to execute the canonical single-block transition for
   that batch (rather than the full vendored closure set).
+- The input-package and trace-commitment manifests are published through the
+  settlement contract's registration path, so the contract records that those
+  manifest hashes exist onchain before later claim submission.
 - The claim stores the input-package manifest blob versioned hash; challenger
   audit fetches that manifest, fetches its referenced chunks from Anvil, and
   feeds the same canonical input-package bytes into workload replay.

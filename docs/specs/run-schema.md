@@ -60,8 +60,8 @@ The step sequence depends on the workload type.
 |---|---|---|---|
 | `prepare` | Prepare Batch | `done` | Canonical batch preparation from synthetic fixture |
 | `exec` | Execute Program | `pending`, `done` | Raster program execution (10-tile chunked replay) |
-| `da` | Publish to DA | `pending`, `done` | Trace-commitment artifact publication to DA layer |
-| `claim` | Submit Claim | `done` | Blob-carrying claim submission binding canonical input + claimed output roots |
+| `da` | Publish to DA | `pending`, `done` | Manifest-rooted DA publication for the input package and trace artifact, including onchain manifest registration |
+| `claim` | Submit Claim | `done` | Claim submission binding canonical input + claimed output roots after registry freshness checks |
 | `audit` | Audit | `done` | Independent local replay audit with conditional trace fetch |
 | `await-finalization` | Await Finalization | `done` | Challenge-period countdown and terminal settlement |
 | `outcome` | Outcome | `settled`, `slashed` | Final on-chain finalization or rejection |
@@ -74,6 +74,8 @@ Note: the L2 lifecycle does not include a separate `trace` step — trace artifa
 - `Fixture` — canonical fixture filename (`l2-poc-synth-fixture.json`)
 - `Batch hash` — keccak256 commitment over tracked transaction bytes (hex)
 - `Block range` — `startBlock → endBlock` range covered by the claim
+- `Input blob tx hash` / `Input blob versioned hash` — manifest publication identifiers for the canonical input package
+- `Input blob registered block` / `Input blob registered at` — block number and timestamp recorded when the contract observed the input manifest hash
 
 **`exec` metrics (`status = done`):**
 - `Workload` — executed workload identifier
@@ -92,11 +94,12 @@ Note: the L2 lifecycle does not include a separate `trace` step — trace artifa
 - `Raster revision` — pinned Raster dependency revision used for the run
 
 **`da` metrics (`status = done`):**
-- `Blob tx hash` - publication transaction hash used as claim trace pointer
-- `Payload bytes` - published trace payload size in bytes
-- `Codec id` - trace codec discriminator (`2` = `trace.commitment.json` v1)
-- `Gas used` - gas consumed by the DA publication tx
-- `Payload hash` - keccak256 hash emitted by `TracePublished`
+- `Input blob tx hash` / `Input blob versioned hash` — canonical input-package manifest publication identifiers
+- `Input blob registered block` / `Input blob registered at` — block metadata captured when `ClaimVerifier` observed the input manifest hash
+- `Input chunk count` / `Input DA gas` — chunk count and total publish gas for the input package
+- `Trace blob tx hash` / `Trace blob versioned hash` — trace-commitment manifest publication identifiers
+- `Trace blob registered block` / `Trace blob registered at` — block metadata captured when `ClaimVerifier` observed the trace manifest hash
+- `Trace payload bytes` / `Trace codec id` / `Trace chunk count` / `Trace DA gas` / `Trace payload hash` — trace artifact publication metadata
 
 **`claim` metrics:**
 - `Claim ID` — on-chain claim identifier
@@ -109,9 +112,10 @@ Note: the L2 lifecycle does not include a separate `trace` step — trace artifa
 - `batchHash` — keccak256 commitment over tracked tx bytes (hex)
 - `Bond amount` — claimer bond in wei (decimal string)
 - `Challenge deadline` — unix timestamp after which the claim can settle
-- `Trace tx hash` — pointer to the DA publication tx hash
-- `Trace payload bytes` — pointer payload byte size
-- `Trace codec id` — pointer codec id
+- `Input blob tx hash` / `Input blob versioned hash` — input manifest identifiers stored alongside the claim
+- `Input blob registered block` / `Input blob registered at` — contract-recorded metadata proving when the input manifest hash was observed
+- `Trace blob tx hash` / `Trace blob versioned hash` — trace manifest identifiers stored alongside the claim
+- `Trace blob registered block` / `Trace blob registered at` — contract-recorded metadata proving when the trace manifest hash was observed
 
 **`replay` metrics (legacy lifecycle):**
 - `Replay time (ms)` — replay duration in milliseconds

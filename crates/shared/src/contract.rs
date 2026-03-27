@@ -3,7 +3,7 @@ use alloy::sol;
 sol! {
     #[sol(rpc)]
     contract ClaimVerifier {
-        constructor(uint64 _challengePeriod, uint256 _minBond);
+        constructor(uint64 _challengePeriod, uint256 _minBond, uint64 _blobRetentionWindow);
     }
 }
 
@@ -19,6 +19,11 @@ mod claim_verifier_interface {
                 Pending,
                 Settled,
                 Slashed,
+            }
+
+            struct BlobRegistration {
+                uint64 blockNumber;
+                uint64 timestamp;
             }
 
             struct Claim {
@@ -60,6 +65,20 @@ mod claim_verifier_interface {
 
             event ClaimSlashed(uint256 indexed claimId);
 
+            event BlobRegistered(
+                bytes32 indexed blobVersionedHash,
+                uint64 blockNumber,
+                uint64 timestamp
+            );
+
+            event BlobAlreadyRegistered(
+                bytes32 indexed blobVersionedHash,
+                uint64 originalBlockNumber,
+                uint64 originalTimestamp
+            );
+
+            function registerManifestBlobs() external;
+
             function submitClaim(
                 bytes32 prevOutputRoot,
                 bytes32 nextOutputRoot,
@@ -79,9 +98,16 @@ mod claim_verifier_interface {
 
             function getClaim(uint256 claimId) external view returns (Claim memory);
 
+            function getBlobRegistration(bytes32 blobVersionedHash)
+                external
+                view
+                returns (BlobRegistration memory);
+
             function challengePeriod() external view returns (uint64);
 
             function minBond() external view returns (uint256);
+
+            function blobRetentionWindow() external view returns (uint64);
         }
     }
 }

@@ -60,14 +60,21 @@ async fn main() -> Result<()> {
     eprintln!("Spawning Anvil...");
     let (_anvil, provider) = shared::anvil::spawn_anvil()?;
 
-    // 3. Publish the canonical input package for L2
+    // 3. Deploy contract
+    eprintln!("Deploying ClaimVerifier from {}...", forge_out.display());
+    let contract_address = shared::deploy::deploy_claim_verifier(&provider, &forge_out).await?;
+    eprintln!("ClaimVerifier deployed at {contract_address}");
+
+    // 4. Publish the canonical input package for L2
     let (input_publication, input_manifest, input_package_json) =
         if is_l2 {
             eprintln!("Publishing canonical input package to Anvil blob storage...");
             let package_bytes = input_package::build_canonical_input_package()?;
             let input_package_json = String::from_utf8(package_bytes.clone())
                 .map_err(|_| eyre::eyre!("input package bytes were not valid UTF-8 json"))?;
-            let (publication, manifest) = shared::da::publish_input_package(&provider, package_bytes).await?;
+            let (publication, manifest) =
+                shared::da::publish_input_package(&provider, contract_address, package_bytes)
+                    .await?;
             (
                 Some(publication),
                 Some(manifest),
@@ -77,7 +84,7 @@ async fn main() -> Result<()> {
             (None, None, None)
         };
 
-    // 4. Execute Raster workload when requested
+    // 5. Execute Raster workload when requested
     let raster_workload_result = raster_workload::run_with_input_root(
         &cli.workload,
         &run_id,
@@ -85,15 +92,12 @@ async fn main() -> Result<()> {
         None,
     )?;
 
-    // 5. Deploy contract
-    eprintln!("Deploying ClaimVerifier from {}...", forge_out.display());
-    let contract_address = shared::deploy::deploy_claim_verifier(&provider, &forge_out).await?;
-    eprintln!("ClaimVerifier deployed at {contract_address}");
-
     // 6. Publish trace commitment to blob DA for real workloads
     let (trace_publication, trace_manifest) = if let Some(result) = &raster_workload_result {
         let trace_payload = raster_workload::load_trace_commitment_payload(result)?;
-        let (publication, manifest) = shared::da::publish_trace_commitment(&provider, trace_payload).await?;
+        let (publication, manifest) =
+            shared::da::publish_trace_commitment(&provider, contract_address, trace_payload)
+                .await?;
         (Some(publication), Some(manifest))
     } else {
         (None, None)
@@ -316,6 +320,18 @@ fn build_steps(
                 "Input blob chunks".to_string(),
                 publication.chunk_count.to_string(),
             );
+            if let Some(block_number) = publication.registration_block_number {
+                metrics.insert(
+                    "Input blob registered block".to_string(),
+                    block_number.to_string(),
+                );
+            }
+            if let Some(timestamp) = publication.registration_timestamp {
+                metrics.insert(
+                    "Input blob registered at".to_string(),
+                    timestamp.to_string(),
+                );
+            }
         }
         steps.push(StepOutput {
             key: "prepare".to_string(),
@@ -391,6 +407,18 @@ fn build_steps(
             ),
             ("Trace payload hash".to_string(), publication.payload_hash.clone()),
         ]);
+        if let Some(block_number) = publication.registration_block_number {
+            metrics.insert(
+                "Trace blob registered block".to_string(),
+                block_number.to_string(),
+            );
+        }
+        if let Some(timestamp) = publication.registration_timestamp {
+            metrics.insert(
+                "Trace blob registered at".to_string(),
+                timestamp.to_string(),
+            );
+        }
         if let Some(input) = input_publication {
             metrics.insert("Input blob tx hash".to_string(), input.manifest_tx_hash.clone());
             metrics.insert(
@@ -402,6 +430,18 @@ fn build_steps(
                 input.chunk_count.to_string(),
             );
             metrics.insert("Input DA gas".to_string(), input.total_gas_used.to_string());
+            if let Some(block_number) = input.registration_block_number {
+                metrics.insert(
+                    "Input blob registered block".to_string(),
+                    block_number.to_string(),
+                );
+            }
+            if let Some(timestamp) = input.registration_timestamp {
+                metrics.insert(
+                    "Input blob registered at".to_string(),
+                    timestamp.to_string(),
+                );
+            }
         }
         steps.push(StepOutput {
             key: "da".to_string(),
@@ -607,6 +647,18 @@ fn build_claim_metrics(claim_result: &shared::claimer::ClaimResult) -> HashMap<S
         "Input blob versioned hash".to_string(),
         claim_result.input_blob_versioned_hash.clone(),
     );
+    if let Some(block_number) = claim_result.input_blob_registered_block {
+        m.insert(
+            "Input blob registered block".to_string(),
+            block_number.to_string(),
+        );
+    }
+    if let Some(timestamp) = claim_result.input_blob_registered_at {
+        m.insert(
+            "Input blob registered at".to_string(),
+            timestamp.to_string(),
+        );
+    }
     m.insert(
         "Trace blob tx hash".to_string(),
         claim_result.trace_blob_tx_hash.clone(),
@@ -615,6 +667,18 @@ fn build_claim_metrics(claim_result: &shared::claimer::ClaimResult) -> HashMap<S
         "Trace blob versioned hash".to_string(),
         claim_result.trace_blob_versioned_hash.clone(),
     );
+    if let Some(block_number) = claim_result.trace_blob_registered_block {
+        m.insert(
+            "Trace blob registered block".to_string(),
+            block_number.to_string(),
+        );
+    }
+    if let Some(timestamp) = claim_result.trace_blob_registered_at {
+        m.insert(
+            "Trace blob registered at".to_string(),
+            timestamp.to_string(),
+        );
+    }
     m
 }
 

@@ -345,6 +345,22 @@ async fn run_pipeline(
         }
     };
 
+    let contract_address =
+        match shared::deploy::deploy_claim_verifier(&state.provider, &state.forge_out_dir).await {
+            Ok(addr) => addr,
+            Err(e) => {
+                let _ = tx
+                    .send(Ok(Event::default().event("error").data(
+                        serde_json::to_string(&ErrorPayload {
+                            message: format!("Failed to deploy contract: {e}"),
+                        })
+                        .unwrap_or_default(),
+                    )))
+                    .await;
+                return;
+            }
+        };
+
     let (input_publication, input_manifest, input_package_json) = if is_l2 {
         let package_bytes = match input_package::build_canonical_input_package() {
             Ok(bytes) => bytes,
@@ -376,7 +392,13 @@ async fn run_pipeline(
             }
         };
 
-        let (publication, manifest) = match shared::da::publish_input_package(&state.provider, package_bytes).await {
+        let (publication, manifest) = match shared::da::publish_input_package(
+            &state.provider,
+            contract_address,
+            package_bytes,
+        )
+        .await
+        {
             Ok(result) => result,
             Err(e) => {
                 let _ = tx
@@ -416,6 +438,18 @@ async fn run_pipeline(
             "Input blob chunks".to_string(),
             publication.chunk_count.to_string(),
         );
+        if let Some(block_number) = publication.registration_block_number {
+            prepare_metrics.insert(
+                "Input blob registered block".to_string(),
+                block_number.to_string(),
+            );
+        }
+        if let Some(timestamp) = publication.registration_timestamp {
+            prepare_metrics.insert(
+                "Input blob registered at".to_string(),
+                timestamp.to_string(),
+            );
+        }
         let prepare_done = serde_json::json!({
             "key": "prepare",
             "label": "Prepare Batch",
@@ -472,23 +506,6 @@ async fn run_pipeline(
             return;
         }
     };
-
-    // Redeploy the contract per run for clean state once DA artifacts exist.
-    let contract_address =
-        match shared::deploy::deploy_claim_verifier(&state.provider, &state.forge_out_dir).await {
-            Ok(addr) => addr,
-            Err(e) => {
-                let _ = tx
-                    .send(Ok(Event::default().event("error").data(
-                        serde_json::to_string(&ErrorPayload {
-                            message: format!("Failed to deploy contract: {e}"),
-                        })
-                        .unwrap_or_default(),
-                    )))
-                    .await;
-                return;
-            }
-        };
 
     if let Some(result) = &raster_workload_result {
         let exec_label = if is_l2 { "Execute Program" } else { "Execute" };
@@ -568,7 +585,13 @@ async fn run_pipeline(
             }
         };
 
-        let (publication, manifest) = match shared::da::publish_trace_commitment(&state.provider, trace_payload).await {
+        let (publication, manifest) = match shared::da::publish_trace_commitment(
+            &state.provider,
+            contract_address,
+            trace_payload,
+        )
+        .await
+        {
             Ok(result) => result,
             Err(e) => {
                 let _ = tx
@@ -609,13 +632,17 @@ async fn run_pipeline(
                 "Trace payload bytes": publication.payload_bytes.to_string(),
                 "Trace codec id": publication.codec_id.to_string(),
                 "Trace chunk count": publication.chunk_count.to_string(),
-                "Trace DA gas": publication.total_gas_used.to_string(),
-                "Trace payload hash": publication.payload_hash.clone(),
-                "Input blob tx hash": input_publication.as_ref().map(|p| p.manifest_tx_hash.clone()).unwrap_or_default(),
-                "Input blob versioned hash": input_publication.as_ref().map(|p| p.manifest_blob_versioned_hash.clone()).unwrap_or_default(),
-                "Input chunk count": input_publication.as_ref().map(|p| p.chunk_count.to_string()).unwrap_or_default(),
-                "Input DA gas": input_publication.as_ref().map(|p| p.total_gas_used.to_string()).unwrap_or_default()
-            }
+                 "Trace DA gas": publication.total_gas_used.to_string(),
+                 "Trace payload hash": publication.payload_hash.clone(),
+                 "Trace blob registered block": publication.registration_block_number.map(|v| v.to_string()).unwrap_or_default(),
+                 "Trace blob registered at": publication.registration_timestamp.map(|v| v.to_string()).unwrap_or_default(),
+                 "Input blob tx hash": input_publication.as_ref().map(|p| p.manifest_tx_hash.clone()).unwrap_or_default(),
+                 "Input blob versioned hash": input_publication.as_ref().map(|p| p.manifest_blob_versioned_hash.clone()).unwrap_or_default(),
+                 "Input blob registered block": input_publication.as_ref().and_then(|p| p.registration_block_number).map(|v| v.to_string()).unwrap_or_default(),
+                 "Input blob registered at": input_publication.as_ref().and_then(|p| p.registration_timestamp).map(|v| v.to_string()).unwrap_or_default(),
+                 "Input chunk count": input_publication.as_ref().map(|p| p.chunk_count.to_string()).unwrap_or_default(),
+                 "Input DA gas": input_publication.as_ref().map(|p| p.total_gas_used.to_string()).unwrap_or_default()
+             }
         });
         send(
             &tx,
@@ -1065,6 +1092,18 @@ fn build_claim_metrics(claim_result: &shared::claimer::ClaimResult) -> HashMap<S
         "Input blob versioned hash".to_string(),
         claim_result.input_blob_versioned_hash.clone(),
     );
+    if let Some(block_number) = claim_result.input_blob_registered_block {
+        m.insert(
+            "Input blob registered block".to_string(),
+            block_number.to_string(),
+        );
+    }
+    if let Some(timestamp) = claim_result.input_blob_registered_at {
+        m.insert(
+            "Input blob registered at".to_string(),
+            timestamp.to_string(),
+        );
+    }
     m.insert(
         "Trace blob tx hash".to_string(),
         claim_result.trace_blob_tx_hash.clone(),
@@ -1073,6 +1112,18 @@ fn build_claim_metrics(claim_result: &shared::claimer::ClaimResult) -> HashMap<S
         "Trace blob versioned hash".to_string(),
         claim_result.trace_blob_versioned_hash.clone(),
     );
+    if let Some(block_number) = claim_result.trace_blob_registered_block {
+        m.insert(
+            "Trace blob registered block".to_string(),
+            block_number.to_string(),
+        );
+    }
+    if let Some(timestamp) = claim_result.trace_blob_registered_at {
+        m.insert(
+            "Trace blob registered at".to_string(),
+            timestamp.to_string(),
+        );
+    }
     m
 }
 
@@ -1117,6 +1168,18 @@ fn build_steps_from_results(
                 "Input blob chunks".to_string(),
                 publication.chunk_count.to_string(),
             );
+            if let Some(block_number) = publication.registration_block_number {
+                metrics.insert(
+                    "Input blob registered block".to_string(),
+                    block_number.to_string(),
+                );
+            }
+            if let Some(timestamp) = publication.registration_timestamp {
+                metrics.insert(
+                    "Input blob registered at".to_string(),
+                    timestamp.to_string(),
+                );
+            }
         }
         steps.push(StepOutput {
             key: "prepare".to_string(),
@@ -1197,6 +1260,18 @@ fn build_steps_from_results(
             ),
             ("Trace payload hash".to_string(), publication.payload_hash.clone()),
         ]);
+        if let Some(block_number) = publication.registration_block_number {
+            metrics.insert(
+                "Trace blob registered block".to_string(),
+                block_number.to_string(),
+            );
+        }
+        if let Some(timestamp) = publication.registration_timestamp {
+            metrics.insert(
+                "Trace blob registered at".to_string(),
+                timestamp.to_string(),
+            );
+        }
         if let Some(input) = input_publication {
             metrics.insert("Input blob tx hash".to_string(), input.manifest_tx_hash.clone());
             metrics.insert(
@@ -1208,6 +1283,18 @@ fn build_steps_from_results(
                 input.chunk_count.to_string(),
             );
             metrics.insert("Input DA gas".to_string(), input.total_gas_used.to_string());
+            if let Some(block_number) = input.registration_block_number {
+                metrics.insert(
+                    "Input blob registered block".to_string(),
+                    block_number.to_string(),
+                );
+            }
+            if let Some(timestamp) = input.registration_timestamp {
+                metrics.insert(
+                    "Input blob registered at".to_string(),
+                    timestamp.to_string(),
+                );
+            }
         }
         steps.push(StepOutput {
             key: "da".to_string(),

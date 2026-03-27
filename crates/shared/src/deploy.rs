@@ -17,6 +17,9 @@ pub const DEFAULT_CHALLENGE_PERIOD: u64 = 120;
 /// Default minimum bond for local Anvil runs (0.01 ether).
 pub const DEFAULT_MIN_BOND: U256 = U256::from_limbs([10_000_000_000_000_000, 0, 0, 0]);
 
+/// Default blob retention window for local Anvil runs (18 days).
+pub const DEFAULT_BLOB_RETENTION_WINDOW: u64 = 18 * 24 * 60 * 60;
+
 /// Deploy the ClaimVerifier contract from Foundry build artifacts.
 ///
 /// Reads `<forge_out_dir>/ClaimVerifier.sol/ClaimVerifier.json` for the
@@ -34,16 +37,19 @@ pub async fn deploy_claim_verifier(
         forge_out_dir,
         DEFAULT_CHALLENGE_PERIOD,
         DEFAULT_MIN_BOND,
+        DEFAULT_BLOB_RETENTION_WINDOW,
     )
     .await
 }
 
-/// Deploy the ClaimVerifier contract with custom challenge period and bond.
+/// Deploy the ClaimVerifier contract with custom challenge period, bond, and
+/// blob retention window.
 pub async fn deploy_claim_verifier_with_config(
     provider: &AnvilProvider,
     forge_out_dir: &Path,
     challenge_period: u64,
     min_bond: U256,
+    blob_retention_window: u64,
 ) -> Result<Address> {
     let artifact_path = forge_out_dir
         .join("ClaimVerifier.sol")
@@ -69,7 +75,8 @@ pub async fn deploy_claim_verifier_with_config(
 
     // Encode constructor arguments
     let constructor_args =
-        ClaimVerifier::constructorCall::new((challenge_period, min_bond)).abi_encode();
+        ClaimVerifier::constructorCall::new((challenge_period, min_bond, blob_retention_window))
+            .abi_encode();
 
     // Concatenate bytecode + constructor args
     let mut deploy_code = bytecode;

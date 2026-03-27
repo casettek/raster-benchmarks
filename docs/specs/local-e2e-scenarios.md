@@ -105,14 +105,16 @@ audit, and keeps the program boundary blob-agnostic.
 
 L2 runs use the expanded lifecycle:
 
-1. **Prepare Batch** — load the canonical synthetic fixture and derive batch identity.
+1. **Prepare Batch** — load the canonical synthetic fixture, derive batch identity, and publish/register the canonical input-package manifest hash.
 2. **Execute Program** — run the Raster program (10 chunked tile invocations). Trace
    artifacts are folded into execution (no separate `trace` step).
-3. **Publish to DA** — publish the canonical input package to blob storage, then
-   publish `trace.commitment.json` as a second blob-backed artifact.
+3. **Publish to DA** — surface the input-package publication metadata and then
+   publish/register `trace.commitment.json` through `ClaimVerifier` after execution.
 4. **Submit Claim** — submit settlement claim with bond, binding:
    `prevOutputRoot`, `nextOutputRoot`, `startBlock`, `endBlock`, `batchHash`,
    `inputBlobVersionedHash`, `traceBlobVersionedHash`.
+   The claim only succeeds if the referenced manifest hashes were already
+   registered and remain fresh enough for the full challenge window.
 5. **Audit** — fetch both blob-backed artifacts from Anvil, materialize the
    input package, and compare local replay against the published trace commitment.
 6. **Await Finalization** — challenge-period countdown (120s default).
@@ -135,6 +137,8 @@ and `runs/fixtures/l2-kona-poc-dishonest.json`.
 - Emits a `[summary]` record with `output_root_status = fixture_output_root`.
 - Submits L2 settlement claim with claimer bond, binding:
   `prevOutputRoot`, `nextOutputRoot`, `startBlock`, `endBlock`, `batchHash`.
+- Contract has already observed the input and trace manifest blob hashes through
+  dedicated registration txs before claim submission.
 - Contract records `challengeDeadline = createdAt + challengePeriod`.
 - Audit step fetches both the published input package and the published trace
   commitment and confirms no divergence.
@@ -153,6 +157,15 @@ and `runs/fixtures/l2-kona-poc-dishonest.json`.
 - Contract transitions to `Slashed`, bond transferred to challenger.
 - Replay/audit flow classifies divergence deterministically and emits structured
   divergence report.
+
+### Negative claim-admission assertions
+
+- A claim that references an unregistered manifest blob hash is rejected before
+  it can enter `Pending` state.
+- A claim that references `bytes32(0)` for the required trace manifest hash is
+  rejected.
+- A claim that references a registered manifest hash that is too old to survive
+  the full challenge window is rejected.
 
 ## Fixture completeness rule
 

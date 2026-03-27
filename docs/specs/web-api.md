@@ -90,10 +90,10 @@ data: {"message":"<error text>"}
 #### Step emission sequence — L2 lifecycle (`l2-kona-poc`)
 
 1. `prepare`, `exec`, `da` emitted first as `status: "pending"` placeholders.
-2. `prepare` promoted to `"running"`, then `"done"` with batch metadata (fixture name, batch hash, block range, input blob tx/versioned-hash metadata).
+2. `prepare` promoted to `"running"`, then `"done"` with batch metadata (fixture name, batch hash, block range, input blob tx/versioned-hash metadata, and input manifest registration block/timestamp).
 3. `exec` promoted to `"running"`, then `"done"` with execution metrics. No separate `trace` step — trace artifacts and trace-commitment metadata are folded into exec.
-4. `da` promoted to `"running"`, then `"done"` with DA publication metrics for both the input-package artifact and `trace.commitment.json`.
-5. `claim` emitted as `"running"`, then `"done"` with full L2 claim metadata (prevOutputRoot, nextOutputRoot, startBlock, endBlock, batchHash, bond amount, challenge deadline, input blob hash, trace blob hash).
+4. `da` promoted to `"running"`, then `"done"` with DA publication metrics for both the input-package artifact and `trace.commitment.json`, including the manifest registration block/timestamp for each claim-bound manifest blob.
+5. `claim` emitted as `"running"`, then `"done"` with full L2 claim metadata (prevOutputRoot, nextOutputRoot, startBlock, endBlock, batchHash, bond amount, challenge deadline, input blob hash, trace blob hash, and manifest registration metadata).
 6. `audit` emitted as `"running"`, then `"done"` with local replay results (replay time, divergence status, input fetch status, trace fetch status).
 7. `await-finalization` emitted as `"running"` with challenge deadline and period metrics, then `"done"` with terminal status text.
 8. `outcome` emitted as `"settled"` or `"slashed"` with final metrics.
@@ -101,12 +101,13 @@ data: {"message":"<error text>"}
 
 #### Claim and replay behavior
 
-`claim` metrics include blob publication identifiers (`Input blob tx hash`, `Input blob versioned hash`, `Trace blob tx hash`, `Trace blob versioned hash`) and full L2 claim metadata for `l2-kona-poc` runs.
+`claim` metrics include blob publication identifiers (`Input blob tx hash`, `Input blob versioned hash`, `Trace blob tx hash`, `Trace blob versioned hash`), manifest registration metadata (`... registered block`, `... registered at`), and full L2 claim metadata for `l2-kona-poc` runs.
 
 Replay/audit behavior is rerun-first:
 
 - Challenger fetches claim metadata, fetches the input-package artifact and trace-commitment artifact from Anvil blob storage, materializes the input package, reruns the workload locally, and compares the fresh trace commitment against the published commitment artifact.
 - Challenger also compares the locally replayed `nextOutputRoot` against the claimed root.
+- The settlement contract independently rejects claims that reference unregistered or stale manifest blob hashes before they ever reach challenger audit.
 - If replay and commitment match, outcome resolves via settlement.
 - If divergence is detected, challenger resolves via `challengeClaim` when the locally observed `nextOutputRoot` differs from the claim.
 

@@ -20,6 +20,7 @@ async fn main() -> Result<()> {
         .parse()
         .map_err(|e| eyre::eyre!("Invalid CLAIM_ID: {e}"))?;
     let mode = env::var("MODE").unwrap_or_else(|_| "honest".to_string());
+    let workload = env::var("WORKLOAD").unwrap_or_else(|_| "l2-kona-poc".to_string());
 
     // Connect to existing Anvil
     eprintln!("Connecting to Anvil at {anvil_url}");
@@ -35,6 +36,7 @@ async fn main() -> Result<()> {
                 &provider,
                 contract_address,
                 claim_id,
+                &workload,
                 ReplayMode::Honest,
                 &l2_input,
             )
@@ -47,6 +49,7 @@ async fn main() -> Result<()> {
                 &provider,
                 contract_address,
                 claim_id,
+                &workload,
                 ReplayMode::DishonestSimulation,
                 &l2_input,
             )
