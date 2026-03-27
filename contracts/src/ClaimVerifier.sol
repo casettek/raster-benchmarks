@@ -6,6 +6,9 @@ import {IClaimVerifier} from "./interfaces/IClaimVerifier.sol";
 contract ClaimVerifier is IClaimVerifier {
     uint256 private _nextClaimId = 1;
     mapping(uint256 => Claim) private _claims;
+    mapping(bytes32 => BlobRegistration) private _blobRegistrations;
+
+    uint256 private constant _MAX_BLOB_COUNT = 6;
 
     /// @notice Configurable challenge period in seconds (default 120s for local demo).
     uint64 public override challengePeriod = 120;
@@ -13,10 +16,56 @@ contract ClaimVerifier is IClaimVerifier {
     /// @notice Minimum bond required to submit a claim (default 0.01 ether for local demo).
     uint256 public override minBond = 0.01 ether;
 
+    /// @notice Blob availability window in seconds (default 18 days for local demo).
+    uint64 public override blobRetentionWindow = 18 days;
+
     /// @notice Constructor allows overriding defaults for local Anvil testing.
-    constructor(uint64 _challengePeriod, uint256 _minBond) {
+    constructor(
+        uint64 _challengePeriod,
+        uint256 _minBond,
+        uint64 _blobRetentionWindow
+    ) {
+        require(
+            _blobRetentionWindow >= _challengePeriod,
+            "blob retention shorter than challenge period"
+        );
         challengePeriod = _challengePeriod;
         minBond = _minBond;
+        blobRetentionWindow = _blobRetentionWindow;
+    }
+
+    function registerManifestBlobs() external {
+        bool sawBlob;
+        for (uint256 i = 0; i < _MAX_BLOB_COUNT; i++) {
+            bytes32 versionedHash = blobhash(i);
+            if (versionedHash == bytes32(0)) {
+                break;
+            }
+            sawBlob = true;
+
+            BlobRegistration storage existing = _blobRegistrations[versionedHash];
+            if (existing.timestamp != 0) {
+                emit BlobAlreadyRegistered(
+                    versionedHash,
+                    existing.blockNumber,
+                    existing.timestamp
+                );
+                continue;
+            }
+
+            BlobRegistration memory registration = BlobRegistration({
+                blockNumber: uint64(block.number),
+                timestamp: uint64(block.timestamp)
+            });
+            _blobRegistrations[versionedHash] = registration;
+            emit BlobRegistered(
+                versionedHash,
+                registration.blockNumber,
+                registration.timestamp
+            );
+        }
+
+        require(sawBlob, "missing blob hash");
     }
 
     function submitClaim(
@@ -30,10 +79,17 @@ contract ClaimVerifier is IClaimVerifier {
     ) external payable returns (uint256 claimId) {
         require(msg.value >= minBond, "insufficient bond");
         require(startBlock <= endBlock, "invalid block range");
-        require(
-            traceBlobVersionedHash != bytes32(0),
+
+        _requireRegisteredFresh(
+            traceBlobVersionedHash,
             "missing trace blob versioned hash"
         );
+        if (inputBlobVersionedHash != bytes32(0)) {
+            _requireRegisteredFresh(
+                inputBlobVersionedHash,
+                "missing input blob versioned hash"
+            );
+        }
 
         uint64 deadline = uint64(block.timestamp) + challengePeriod;
 
@@ -109,5 +165,31 @@ contract ClaimVerifier is IClaimVerifier {
 
     function getClaim(uint256 claimId) external view returns (Claim memory) {
         return _claims[claimId];
+    }
+
+    function getBlobRegistration(
+        bytes32 blobVersionedHash
+    ) external view returns (BlobRegistration memory) {
+        return _blobRegistrations[blobVersionedHash];
+    }
+
+    function _requireRegisteredFresh(
+        bytes32 blobVersionedHash,
+        string memory zeroHashMessage
+    ) internal view {
+        require(blobVersionedHash != bytes32(0), zeroHashMessage);
+
+        BlobRegistration memory registration = _blobRegistrations[
+            blobVersionedHash
+        ];
+        require(registration.timestamp != 0, "unregistered blob versioned hash");
+
+        uint256 requiredUntil = uint256(block.timestamp) + challengePeriod;
+        uint256 availableUntil =
+            uint256(registration.timestamp) + blobRetentionWindow;
+        require(
+            availableUntil >= requiredUntil,
+            "blob versioned hash too old"
+        );
     }
 }

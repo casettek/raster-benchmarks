@@ -44,8 +44,12 @@ pub struct ClaimResult {
     pub batch_hash: String,
     pub input_blob_tx_hash: String,
     pub input_blob_versioned_hash: String,
+    pub input_blob_registered_block: Option<u64>,
+    pub input_blob_registered_at: Option<u64>,
     pub trace_blob_tx_hash: String,
     pub trace_blob_versioned_hash: String,
+    pub trace_blob_registered_block: Option<u64>,
+    pub trace_blob_registered_at: Option<u64>,
     pub bond_amount: String,
     pub challenge_deadline: u64,
     pub state: String,
@@ -127,11 +131,17 @@ pub async fn submit_claim(
             "0x{}",
             alloy::hex::encode(submitted.inputBlobVersionedHash)
         ),
+        input_blob_registered_block: input_publication
+            .and_then(|publication| publication.registration_block_number),
+        input_blob_registered_at: input_publication
+            .and_then(|publication| publication.registration_timestamp),
         trace_blob_tx_hash: trace_publication.manifest_tx_hash.clone(),
         trace_blob_versioned_hash: format!(
             "0x{}",
             alloy::hex::encode(submitted.traceBlobVersionedHash)
         ),
+        trace_blob_registered_block: trace_publication.registration_block_number,
+        trace_blob_registered_at: trace_publication.registration_timestamp,
         bond_amount: format!("{}", submitted.bondAmount),
         challenge_deadline: submitted.challengeDeadline,
         state: "Pending".to_string(),

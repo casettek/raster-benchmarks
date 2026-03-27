@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::anvil::AnvilProvider;
+use crate::contract::IClaimVerifier;
 
 pub const TRACE_CODEC_COMMITMENT_JSON_V1: u8 = 2;
 pub const INPUT_CODEC_JSON_V1: u8 = 10;
@@ -27,6 +28,10 @@ pub struct BlobPublication {
     pub codec_id: u8,
     pub manifest_tx_hash: String,
     pub manifest_blob_versioned_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registration_block_number: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registration_timestamp: Option<u64>,
     pub payload_hash: String,
     pub payload_bytes: u64,
     pub chunk_count: u32,
@@ -66,17 +71,32 @@ pub struct BlobManifestIndex {
 
 pub async fn publish_input_package(
     provider: &AnvilProvider,
+    contract_address: Address,
     payload: Vec<u8>,
 ) -> Result<(BlobPublication, BlobManifest)> {
-    publish_blob_artifact(provider, INPUT_ARTIFACT_KIND, INPUT_CODEC_JSON_V1, payload).await
+    publish_blob_artifact(
+        provider,
+        contract_address,
+        INPUT_ARTIFACT_KIND,
+        INPUT_CODEC_JSON_V1,
+        payload,
+    )
+    .await
 }
 
 pub async fn publish_trace_commitment(
     provider: &AnvilProvider,
+    contract_address: Address,
     payload: Vec<u8>,
 ) -> Result<(BlobPublication, BlobManifest)> {
-    publish_blob_artifact(provider, TRACE_ARTIFACT_KIND, TRACE_CODEC_COMMITMENT_JSON_V1, payload)
-        .await
+    publish_blob_artifact(
+        provider,
+        contract_address,
+        TRACE_ARTIFACT_KIND,
+        TRACE_CODEC_COMMITMENT_JSON_V1,
+        payload,
+    )
+    .await
 }
 
 pub fn persist_blob_index(
@@ -140,6 +160,7 @@ pub fn parse_blob_versioned_hash(hash: &str) -> Result<B256> {
 
 async fn publish_blob_artifact(
     provider: &AnvilProvider,
+    contract_address: Address,
     kind: &str,
     codec_id: u8,
     payload: Vec<u8>,
@@ -151,7 +172,7 @@ async fn publish_blob_artifact(
     let mut chunks = Vec::new();
     let mut total_gas_used = 0u64;
     for bytes in payload.chunks(SINGLE_BLOB_PAYLOAD_BYTES) {
-        let chunk = publish_single_blob(provider, bytes.to_vec()).await?;
+        let chunk = publish_single_blob(provider, BlobTxTarget::Sink, bytes.to_vec()).await?;
         total_gas_used = total_gas_used.saturating_add(chunk.gas_used);
         chunks.push(BlobChunkRef {
             tx_hash: chunk.tx_hash,
@@ -176,7 +197,12 @@ async fn publish_blob_artifact(
         ));
     }
 
-    let manifest_chunk = publish_single_blob(provider, manifest_payload).await?;
+    let manifest_chunk = publish_single_blob(
+        provider,
+        BlobTxTarget::ClaimVerifierRegistration(contract_address),
+        manifest_payload,
+    )
+    .await?;
     total_gas_used = total_gas_used.saturating_add(manifest_chunk.gas_used);
 
     Ok((
@@ -185,6 +211,8 @@ async fn publish_blob_artifact(
             codec_id,
             manifest_tx_hash: manifest_chunk.tx_hash,
             manifest_blob_versioned_hash: manifest_chunk.blob_versioned_hash,
+            registration_block_number: manifest_chunk.registration_block_number,
+            registration_timestamp: manifest_chunk.registration_timestamp,
             payload_hash,
             payload_bytes,
             chunk_count: u32::try_from(manifest.chunks.len())
@@ -195,7 +223,11 @@ async fn publish_blob_artifact(
     ))
 }
 
-async fn publish_single_blob(provider: &AnvilProvider, payload: Vec<u8>) -> Result<SingleBlobTx> {
+async fn publish_single_blob(
+    provider: &AnvilProvider,
+    target: BlobTxTarget,
+    payload: Vec<u8>,
+) -> Result<SingleBlobTx> {
     let sidecar = SidecarBuilder::<SimpleCoder>::from_slice(&payload)
         .build()
         .wrap_err("failed to build blob sidecar")?;
@@ -207,17 +239,50 @@ async fn publish_single_blob(provider: &AnvilProvider, payload: Vec<u8>) -> Resu
         ));
     }
 
-    let tx = TransactionRequest::default()
-        .with_to(BLOB_SINK_ADDRESS)
-        .with_blob_sidecar(sidecar);
+    let tx = match target {
+        BlobTxTarget::Sink => TransactionRequest::default()
+            .with_to(BLOB_SINK_ADDRESS)
+            .with_blob_sidecar(sidecar),
+        BlobTxTarget::ClaimVerifierRegistration(contract_address) => {
+            let selector = &keccak256("registerManifestBlobs()".as_bytes())[..4];
+            let input = Vec::from(selector);
+            TransactionRequest::default()
+                .with_to(contract_address)
+                .with_input(input)
+                .with_blob_sidecar(sidecar)
+        }
+    };
 
     let pending = provider.send_transaction(tx).await?;
     let receipt = pending.get_receipt().await?;
+
+    let mut registration_block_number = None;
+    let mut registration_timestamp = None;
+    if matches!(target, BlobTxTarget::ClaimVerifierRegistration(_)) {
+        registration_block_number = receipt.block_number;
+        let block = provider
+            .get_block_by_number(receipt.block_number.unwrap().into())
+            .await?
+            .ok_or_else(|| eyre!("block not found for manifest registration tx"))?;
+        registration_timestamp = Some(block.header.timestamp);
+
+        let saw_registered_event = receipt.inner.logs().iter().any(|log| {
+            log.log_decode::<IClaimVerifier::BlobRegistered>().is_ok()
+                || log.log_decode::<IClaimVerifier::BlobAlreadyRegistered>().is_ok()
+        });
+        if !saw_registered_event {
+            return Err(eyre!(
+                "manifest registration tx did not emit a blob registration event"
+            ));
+        }
+    }
 
     Ok(SingleBlobTx {
         tx_hash: format!("{}", receipt.transaction_hash),
         blob_versioned_hash: format!("0x{}", alloy::hex::encode(versioned_hashes[0])),
         gas_used: receipt.gas_used,
+        registration_block_number,
+        registration_timestamp,
     })
 }
 
@@ -249,6 +314,14 @@ struct SingleBlobTx {
     tx_hash: String,
     blob_versioned_hash: String,
     gas_used: u64,
+    registration_block_number: Option<u64>,
+    registration_timestamp: Option<u64>,
+}
+
+#[derive(Clone, Copy)]
+enum BlobTxTarget {
+    Sink,
+    ClaimVerifierRegistration(Address),
 }
 
 #[allow(dead_code)]

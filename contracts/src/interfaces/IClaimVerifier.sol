@@ -9,6 +9,11 @@ interface IClaimVerifier {
         Slashed
     }
 
+    struct BlobRegistration {
+        uint64 blockNumber;
+        uint64 timestamp;
+    }
+
     struct Claim {
         address claimer;
         bytes32 prevOutputRoot;
@@ -55,6 +60,20 @@ interface IClaimVerifier {
 
     event ClaimSlashed(uint256 indexed claimId);
 
+    event BlobRegistered(
+        bytes32 indexed blobVersionedHash,
+        uint64 blockNumber,
+        uint64 timestamp
+    );
+
+    event BlobAlreadyRegistered(
+        bytes32 indexed blobVersionedHash,
+        uint64 originalBlockNumber,
+        uint64 originalTimestamp
+    );
+
+    function registerManifestBlobs() external;
+
     function submitClaim(
         bytes32 prevOutputRoot,
         bytes32 nextOutputRoot,
@@ -74,7 +93,13 @@ interface IClaimVerifier {
 
     function getClaim(uint256 claimId) external view returns (Claim memory);
 
+    function getBlobRegistration(
+        bytes32 blobVersionedHash
+    ) external view returns (BlobRegistration memory);
+
     function challengePeriod() external view returns (uint64);
 
     function minBond() external view returns (uint256);
+
+    function blobRetentionWindow() external view returns (uint64);
 }
