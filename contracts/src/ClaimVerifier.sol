@@ -19,36 +19,23 @@ contract ClaimVerifier is IClaimVerifier {
         minBond = _minBond;
     }
 
-    function publishTrace(
-        bytes calldata payload,
-        uint8 codecId
-    ) external returns (bytes32 payloadHash, uint32 payloadBytes) {
-        payloadHash = keccak256(payload);
-        payloadBytes = uint32(payload.length);
-        emit TracePublished(msg.sender, payloadHash, payloadBytes, codecId);
-    }
-
     function submitClaim(
         bytes32 prevOutputRoot,
         bytes32 nextOutputRoot,
         uint64 startBlock,
         uint64 endBlock,
         bytes32 batchHash,
-        bytes32 traceTxHash,
-        uint32 tracePayloadBytes,
-        uint8 traceCodecId
+        bytes32 inputBlobVersionedHash,
+        bytes32 traceBlobVersionedHash
     ) external payable returns (uint256 claimId) {
         require(msg.value >= minBond, "insufficient bond");
         require(startBlock <= endBlock, "invalid block range");
-        require(traceTxHash != bytes32(0), "missing trace tx hash");
-        require(tracePayloadBytes > 0, "missing trace payload");
-        require(traceCodecId != 0, "missing trace codec");
+        require(
+            traceBlobVersionedHash != bytes32(0),
+            "missing trace blob versioned hash"
+        );
 
         uint64 deadline = uint64(block.timestamp) + challengePeriod;
-
-        // Capture the blob versioned hash from the current tx context.
-        // On local Anvil without real blobs this will be bytes32(0).
-        bytes32 blobHash = _currentBlobVersionedHash();
 
         claimId = _nextClaimId++;
         _claims[claimId] = Claim({
@@ -58,10 +45,8 @@ contract ClaimVerifier is IClaimVerifier {
             startBlock: startBlock,
             endBlock: endBlock,
             batchHash: batchHash,
-            inputBlobVersionedHash: blobHash,
-            traceTxHash: traceTxHash,
-            tracePayloadBytes: tracePayloadBytes,
-            traceCodecId: traceCodecId,
+            inputBlobVersionedHash: inputBlobVersionedHash,
+            traceBlobVersionedHash: traceBlobVersionedHash,
             bondAmount: msg.value,
             createdAt: uint64(block.timestamp),
             challengeDeadline: deadline,
@@ -76,7 +61,8 @@ contract ClaimVerifier is IClaimVerifier {
             startBlock,
             endBlock,
             batchHash,
-            blobHash,
+            inputBlobVersionedHash,
+            traceBlobVersionedHash,
             msg.value,
             deadline
         );
@@ -123,15 +109,5 @@ contract ClaimVerifier is IClaimVerifier {
 
     function getClaim(uint256 claimId) external view returns (Claim memory) {
         return _claims[claimId];
-    }
-
-    /// @dev Attempt to read the first blob versioned hash from EIP-4844 context.
-    /// Returns bytes32(0) on chains/environments without blob support (e.g., Anvil).
-    function _currentBlobVersionedHash() private view returns (bytes32 hash) {
-        // BLOBHASH opcode (0x49) with index 0
-        // On environments without blob support, this returns 0.
-        assembly {
-            hash := blobhash(0)
-        }
     }
 }

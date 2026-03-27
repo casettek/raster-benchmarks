@@ -12,6 +12,7 @@ resolver = "2"
 
 [workspace.dependencies]
 alloy = { version = "1", features = [
+    "consensus",
     "providers",
     "provider-http",
     "signers",
@@ -23,6 +24,8 @@ alloy = { version = "1", features = [
     "transport-http",
     "node-bindings",
     "json",
+    "eips",
+    "kzg",
 ] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 serde = { version = "=1.0.219", features = ["derive"] }

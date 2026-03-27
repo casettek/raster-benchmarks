@@ -1,11 +1,11 @@
-use alloy::primitives::{Address, FixedBytes, U256};
+use alloy::primitives::{Address, B256, FixedBytes, U256};
 use alloy::providers::Provider;
 use eyre::Result;
 use serde::Serialize;
 
 use crate::anvil::AnvilProvider;
 use crate::contract::IClaimVerifier;
-use crate::da::TracePublication;
+use crate::da::BlobPublication;
 
 /// L2 claim fields derived from workload execution and the canonical fixture.
 #[derive(Debug, Clone)]
@@ -42,33 +42,37 @@ pub struct ClaimResult {
     pub start_block: u64,
     pub end_block: u64,
     pub batch_hash: String,
+    pub input_blob_tx_hash: String,
     pub input_blob_versioned_hash: String,
+    pub trace_blob_tx_hash: String,
+    pub trace_blob_versioned_hash: String,
     pub bond_amount: String,
     pub challenge_deadline: u64,
-    pub trace_tx_hash: String,
-    pub trace_payload_bytes: u32,
-    pub trace_codec_id: u8,
     pub state: String,
 }
 
 /// Submit an L2 settlement claim to the deployed ClaimVerifier contract.
 ///
 /// The caller provides L2-specific claim fields (output roots, block range,
-/// batch hash) and the published trace-commitment pointer metadata.
+/// batch hash) and the published blob metadata.
 pub async fn submit_claim(
     provider: &AnvilProvider,
     contract_address: Address,
     l2_input: &L2ClaimInput,
-    trace_publication: &TracePublication,
+    input_publication: Option<&BlobPublication>,
+    trace_publication: &BlobPublication,
     bond_value: U256,
 ) -> Result<ClaimResult> {
     let prev_output_root = FixedBytes::from(l2_input.prev_output_root);
     let next_output_root = FixedBytes::from(l2_input.next_output_root);
     let batch_hash = FixedBytes::from(l2_input.batch_hash);
 
-    let trace_tx_hash = crate::da::parse_trace_tx_hash(&trace_publication.trace_tx_hash)?;
-    let trace_payload_bytes = trace_publication.payload_bytes;
-    let trace_codec_id = trace_publication.codec_id;
+    let input_blob_versioned_hash = input_publication
+        .map(|publication| publication.manifest_blob_versioned_hash.parse())
+        .transpose()?
+        .unwrap_or(B256::ZERO);
+    let trace_blob_versioned_hash: B256 =
+        trace_publication.manifest_blob_versioned_hash.parse()?;
 
     let contract = IClaimVerifier::new(contract_address, provider);
     let pending = contract
@@ -78,9 +82,8 @@ pub async fn submit_claim(
             l2_input.start_block,
             l2_input.end_block,
             batch_hash,
-            trace_tx_hash,
-            trace_payload_bytes,
-            trace_codec_id,
+            input_blob_versioned_hash,
+            trace_blob_versioned_hash,
         )
         .value(bond_value)
         .send()
@@ -117,15 +120,20 @@ pub async fn submit_claim(
         start_block: l2_input.start_block,
         end_block: l2_input.end_block,
         batch_hash: format!("0x{}", alloy::hex::encode(batch_hash)),
+        input_blob_tx_hash: input_publication
+            .map(|publication| publication.manifest_tx_hash.clone())
+            .unwrap_or_else(|| format!("0x{}", alloy::hex::encode(B256::ZERO))),
         input_blob_versioned_hash: format!(
             "0x{}",
             alloy::hex::encode(submitted.inputBlobVersionedHash)
         ),
+        trace_blob_tx_hash: trace_publication.manifest_tx_hash.clone(),
+        trace_blob_versioned_hash: format!(
+            "0x{}",
+            alloy::hex::encode(submitted.traceBlobVersionedHash)
+        ),
         bond_amount: format!("{}", submitted.bondAmount),
         challenge_deadline: submitted.challengeDeadline,
-        trace_tx_hash: format!("0x{}", alloy::hex::encode(trace_tx_hash)),
-        trace_payload_bytes,
-        trace_codec_id,
         state: "Pending".to_string(),
     })
 }

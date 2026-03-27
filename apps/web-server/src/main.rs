@@ -17,6 +17,7 @@ use shared::anvil::AnvilProvider;
 use shared::challenger::ReplayMode;
 use shared::claimer::{L2ClaimInput, default_l2_claim_input};
 use shared::deploy::{DEFAULT_CHALLENGE_PERIOD, DEFAULT_MIN_BOND};
+use shared::input_package;
 use shared::raster_workload;
 use shared::run::{DivergenceSummary, RasterPin, RunOutput, StepOutput, SummaryOutput};
 use tokio::sync::Mutex;
@@ -311,23 +312,6 @@ async fn run_pipeline(
         }
     }
 
-    // Redeploy the contract per run for clean state.
-    let contract_address =
-        match shared::deploy::deploy_claim_verifier(&state.provider, &state.forge_out_dir).await {
-            Ok(addr) => addr,
-            Err(e) => {
-                let _ = tx
-                    .send(Ok(Event::default().event("error").data(
-                        serde_json::to_string(&ErrorPayload {
-                            message: format!("Failed to deploy contract: {e}"),
-                        })
-                        .unwrap_or_default(),
-                    )))
-                    .await;
-                return;
-            }
-        };
-
     // --- Prepare step (L2 only) ---
     if is_l2 {
         let prepare_running = serde_json::json!({
@@ -361,7 +345,88 @@ async fn run_pipeline(
         }
     };
 
-    if is_l2 {
+    let (input_publication, input_manifest, materialized_input_root, materialized_input_json) = if is_l2 {
+        let package_bytes = match input_package::build_canonical_input_package() {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                let _ = tx
+                    .send(Ok(Event::default().event("error").data(
+                        serde_json::to_string(&ErrorPayload {
+                            message: format!("Failed to build input package: {e}"),
+                        })
+                        .unwrap_or_default(),
+                    )))
+                    .await;
+                return;
+            }
+        };
+
+        let (publication, manifest) = match shared::da::publish_input_package(&state.provider, package_bytes).await {
+            Ok(result) => result,
+            Err(e) => {
+                let _ = tx
+                    .send(Ok(Event::default().event("error").data(
+                        serde_json::to_string(&ErrorPayload {
+                            message: format!("Input publication failed: {e}"),
+                        })
+                        .unwrap_or_default(),
+                    )))
+                    .await;
+                return;
+            }
+        };
+
+        let fetched_package = match shared::da::fetch_blob_artifact(
+            &state.provider,
+            shared::da::parse_blob_versioned_hash(&publication.manifest_blob_versioned_hash)
+                .expect("input blob versioned hash should parse"),
+        )
+        .await
+        {
+            Ok((_manifest, bytes)) => bytes,
+            Err(e) => {
+                let _ = tx
+                    .send(Ok(Event::default().event("error").data(
+                        serde_json::to_string(&ErrorPayload {
+                            message: format!("Failed to fetch published input package: {e}"),
+                        })
+                        .unwrap_or_default(),
+                    )))
+                    .await;
+                return;
+            }
+        };
+
+        let materialized_root = PathBuf::from("runs")
+            .join("artifacts")
+            .join(&run_id)
+            .join("input-package");
+        if let Err(e) = input_package::materialize_input_package(&fetched_package, &materialized_root) {
+            let _ = tx
+                .send(Ok(Event::default().event("error").data(
+                    serde_json::to_string(&ErrorPayload {
+                        message: format!("Failed to materialize input package: {e}"),
+                    })
+                    .unwrap_or_default(),
+                )))
+                .await;
+            return;
+        }
+        let fixture_json = match input_package::canonical_fixture_json_from_root(&materialized_root) {
+            Ok(value) => value,
+            Err(e) => {
+                let _ = tx
+                    .send(Ok(Event::default().event("error").data(
+                        serde_json::to_string(&ErrorPayload {
+                            message: format!("Failed to read materialized fixture: {e}"),
+                        })
+                        .unwrap_or_default(),
+                    )))
+                    .await;
+                return;
+            }
+        };
+
         let mut prepare_metrics = HashMap::new();
         prepare_metrics.insert(
             "Fixture".to_string(),
@@ -374,6 +439,18 @@ async fn run_pipeline(
         prepare_metrics.insert(
             "Block range".to_string(),
             format!("{} → {}", l2_input.start_block, l2_input.end_block),
+        );
+        prepare_metrics.insert(
+            "Input blob tx hash".to_string(),
+            publication.manifest_tx_hash.clone(),
+        );
+        prepare_metrics.insert(
+            "Input blob versioned hash".to_string(),
+            publication.manifest_blob_versioned_hash.clone(),
+        );
+        prepare_metrics.insert(
+            "Input blob chunks".to_string(),
+            publication.chunk_count.to_string(),
         );
         let prepare_done = serde_json::json!({
             "key": "prepare",
@@ -388,7 +465,16 @@ async fn run_pipeline(
                 .data(prepare_done.to_string()),
         )
         .await;
-    }
+
+        (
+            Some(publication),
+            Some(manifest),
+            Some(materialized_root),
+            Some(fixture_json),
+        )
+    } else {
+        (None, None, None, None)
+    };
 
     // --- Execute step ---
     let exec_label = if is_l2 { "Execute Program" } else { "Execute" };
@@ -404,7 +490,12 @@ async fn run_pipeline(
     )
     .await;
 
-    let raster_workload_result = match raster_workload::run(&workload, &run_id) {
+    let raster_workload_result = match raster_workload::run_with_input_root(
+        &workload,
+        &run_id,
+        materialized_input_json,
+        materialized_input_root.as_deref(),
+    ) {
         Ok(result) => result,
         Err(e) => {
             let _ = tx
@@ -418,6 +509,23 @@ async fn run_pipeline(
             return;
         }
     };
+
+    // Redeploy the contract per run for clean state once DA artifacts exist.
+    let contract_address =
+        match shared::deploy::deploy_claim_verifier(&state.provider, &state.forge_out_dir).await {
+            Ok(addr) => addr,
+            Err(e) => {
+                let _ = tx
+                    .send(Ok(Event::default().event("error").data(
+                        serde_json::to_string(&ErrorPayload {
+                            message: format!("Failed to deploy contract: {e}"),
+                        })
+                        .unwrap_or_default(),
+                    )))
+                    .await;
+                return;
+            }
+        };
 
     if let Some(result) = &raster_workload_result {
         let exec_label = if is_l2 { "Execute Program" } else { "Execute" };
@@ -469,7 +577,7 @@ async fn run_pipeline(
     } else {
         "DA Submission"
     };
-    let da_publication = if let Some(result) = &raster_workload_result {
+    let (trace_publication, _trace_manifest) = if let Some(result) = &raster_workload_result {
         let da_running = serde_json::json!({
             "key": "da",
             "label": da_label,
@@ -497,15 +605,8 @@ async fn run_pipeline(
             }
         };
 
-        let publication = match shared::da::publish_trace(
-            &state.provider,
-            contract_address,
-            trace_payload,
-            shared::da::TRACE_CODEC_COMMITMENT_JSON_V1,
-        )
-        .await
-        {
-            Ok(publication) => publication,
+        let (publication, manifest) = match shared::da::publish_trace_commitment(&state.provider, trace_payload).await {
+            Ok(result) => result,
             Err(e) => {
                 let _ = tx
                     .send(Ok(Event::default().event("error").data(
@@ -519,11 +620,15 @@ async fn run_pipeline(
             }
         };
 
-        if let Err(e) = shared::da::persist_trace_index(&run_id, &publication) {
+        if let Err(e) = shared::da::persist_blob_index(
+            &run_id,
+            input_publication.as_ref().zip(input_manifest.as_ref()),
+            Some((&publication, &manifest)),
+        ) {
             let _ = tx
                 .send(Ok(Event::default().event("error").data(
                     serde_json::to_string(&ErrorPayload {
-                        message: format!("Failed to persist trace index: {e}"),
+                        message: format!("Failed to persist blob index: {e}"),
                     })
                     .unwrap_or_default(),
                 )))
@@ -536,11 +641,17 @@ async fn run_pipeline(
             "label": da_label,
             "status": "done",
             "metrics": {
-                "Blob tx hash": publication.trace_tx_hash.clone(),
-                "Payload bytes": publication.payload_bytes.to_string(),
-                "Codec id": publication.codec_id.to_string(),
-                "Gas used": publication.gas_used.to_string(),
-                "Payload hash": publication.payload_hash.clone()
+                "Trace blob tx hash": publication.manifest_tx_hash.clone(),
+                "Trace blob versioned hash": publication.manifest_blob_versioned_hash.clone(),
+                "Trace payload bytes": publication.payload_bytes.to_string(),
+                "Trace codec id": publication.codec_id.to_string(),
+                "Trace chunk count": publication.chunk_count.to_string(),
+                "Trace DA gas": publication.total_gas_used.to_string(),
+                "Trace payload hash": publication.payload_hash.clone(),
+                "Input blob tx hash": input_publication.as_ref().map(|p| p.manifest_tx_hash.clone()).unwrap_or_default(),
+                "Input blob versioned hash": input_publication.as_ref().map(|p| p.manifest_blob_versioned_hash.clone()).unwrap_or_default(),
+                "Input chunk count": input_publication.as_ref().map(|p| p.chunk_count.to_string()).unwrap_or_default(),
+                "Input DA gas": input_publication.as_ref().map(|p| p.total_gas_used.to_string()).unwrap_or_default()
             }
         });
         send(
@@ -549,9 +660,9 @@ async fn run_pipeline(
         )
         .await;
 
-        Some(publication)
+        (Some(publication), Some(manifest))
     } else {
-        None
+        (None, None)
     };
 
     // --- Claim step ---
@@ -573,7 +684,8 @@ async fn run_pipeline(
         &state.provider,
         contract_address,
         &l2_input,
-        da_publication
+        input_publication.as_ref(),
+        trace_publication
             .as_ref()
             .expect("trace publication is required before claim submission"),
         DEFAULT_MIN_BOND,
@@ -674,6 +786,9 @@ async fn run_pipeline(
             "Trace fetch".to_string(),
             audit.divergence.trace_fetch_status.clone(),
         );
+        if let Some(status) = &audit.divergence.input_fetch_status {
+            audit_metrics.insert("Input fetch".to_string(), status.clone());
+        }
         if let Some(index) = audit.divergence.first_divergence_index {
             audit_metrics.insert("First divergence index".to_string(), index.to_string());
         }
@@ -813,6 +928,9 @@ async fn run_pipeline(
             "Trace fetch".to_string(),
             resolution.divergence.trace_fetch_status.clone(),
         );
+        if let Some(status) = &resolution.divergence.input_fetch_status {
+            replay_metrics.insert("Input fetch".to_string(), status.clone());
+        }
         if let Some(index) = resolution.divergence.first_divergence_index {
             replay_metrics.insert("First divergence index".to_string(), index.to_string());
         }
@@ -860,14 +978,14 @@ async fn run_pipeline(
         "Trace fetch".to_string(),
         resolution.divergence.trace_fetch_status.clone(),
     );
-    if let Some(trace_tx_hash) = &resolution.divergence.trace_tx_hash {
-        outcome_metrics.insert("Trace tx hash".to_string(), trace_tx_hash.clone());
+    if let Some(status) = &resolution.divergence.input_fetch_status {
+        outcome_metrics.insert("Input fetch".to_string(), status.clone());
     }
-    if let Some(trace_payload_bytes) = resolution.divergence.trace_payload_bytes {
-        outcome_metrics.insert(
-            "Trace payload bytes".to_string(),
-            trace_payload_bytes.to_string(),
-        );
+    if let Some(hash) = &resolution.divergence.input_blob_versioned_hash {
+        outcome_metrics.insert("Input blob versioned hash".to_string(), hash.clone());
+    }
+    if let Some(hash) = &resolution.divergence.trace_blob_versioned_hash {
+        outcome_metrics.insert("Trace blob versioned hash".to_string(), hash.clone());
     }
 
     let outcome_step = serde_json::json!({
@@ -891,7 +1009,8 @@ async fn run_pipeline(
         is_l2,
         &workload,
         &raster_workload_result,
-        &da_publication,
+        &input_publication,
+        &trace_publication,
         &claim_result,
         &claim_metrics,
         &resolution,
@@ -901,7 +1020,8 @@ async fn run_pipeline(
 
     let summary = build_summary(
         &raster_workload_result,
-        &da_publication,
+        &input_publication,
+        &trace_publication,
         &claim_result,
         &resolution,
         outcome_status,
@@ -975,16 +1095,20 @@ fn build_claim_metrics(claim_result: &shared::claimer::ClaimResult) -> HashMap<S
         claim_result.challenge_deadline.to_string(),
     );
     m.insert(
-        "Trace tx hash".to_string(),
-        claim_result.trace_tx_hash.clone(),
+        "Input blob tx hash".to_string(),
+        claim_result.input_blob_tx_hash.clone(),
     );
     m.insert(
-        "Trace payload bytes".to_string(),
-        claim_result.trace_payload_bytes.to_string(),
+        "Input blob versioned hash".to_string(),
+        claim_result.input_blob_versioned_hash.clone(),
     );
     m.insert(
-        "Trace codec id".to_string(),
-        claim_result.trace_codec_id.to_string(),
+        "Trace blob tx hash".to_string(),
+        claim_result.trace_blob_tx_hash.clone(),
+    );
+    m.insert(
+        "Trace blob versioned hash".to_string(),
+        claim_result.trace_blob_versioned_hash.clone(),
     );
     m
 }
@@ -995,7 +1119,8 @@ fn build_steps_from_results(
     is_l2: bool,
     workload: &str,
     raster_result: &Option<raster_workload::RasterWorkloadResult>,
-    da_publication: &Option<shared::da::TracePublication>,
+    input_publication: &Option<shared::da::BlobPublication>,
+    trace_publication: &Option<shared::da::BlobPublication>,
     claim_result: &shared::claimer::ClaimResult,
     claim_metrics: &HashMap<String, String>,
     resolution: &shared::challenger::AuditResolution,
@@ -1016,6 +1141,20 @@ fn build_steps_from_results(
             "Block range".to_string(),
             format!("{} → {}", claim_result.start_block, claim_result.end_block),
         );
+        if let Some(publication) = input_publication {
+            metrics.insert(
+                "Input blob tx hash".to_string(),
+                publication.manifest_tx_hash.clone(),
+            );
+            metrics.insert(
+                "Input blob versioned hash".to_string(),
+                publication.manifest_blob_versioned_hash.clone(),
+            );
+            metrics.insert(
+                "Input blob chunks".to_string(),
+                publication.chunk_count.to_string(),
+            );
+        }
         steps.push(StepOutput {
             key: "prepare".to_string(),
             label: "Prepare Batch".to_string(),
@@ -1070,24 +1209,48 @@ fn build_steps_from_results(
     } else {
         "DA Submission"
     };
-    if let Some(publication) = da_publication {
+    if let Some(publication) = trace_publication {
+        let mut metrics = HashMap::from([
+            (
+                "Trace blob tx hash".to_string(),
+                publication.manifest_tx_hash.clone(),
+            ),
+            (
+                "Trace blob versioned hash".to_string(),
+                publication.manifest_blob_versioned_hash.clone(),
+            ),
+            (
+                "Trace payload bytes".to_string(),
+                publication.payload_bytes.to_string(),
+            ),
+            ("Trace codec id".to_string(), publication.codec_id.to_string()),
+            (
+                "Trace chunk count".to_string(),
+                publication.chunk_count.to_string(),
+            ),
+            (
+                "Trace DA gas".to_string(),
+                publication.total_gas_used.to_string(),
+            ),
+            ("Trace payload hash".to_string(), publication.payload_hash.clone()),
+        ]);
+        if let Some(input) = input_publication {
+            metrics.insert("Input blob tx hash".to_string(), input.manifest_tx_hash.clone());
+            metrics.insert(
+                "Input blob versioned hash".to_string(),
+                input.manifest_blob_versioned_hash.clone(),
+            );
+            metrics.insert(
+                "Input chunk count".to_string(),
+                input.chunk_count.to_string(),
+            );
+            metrics.insert("Input DA gas".to_string(), input.total_gas_used.to_string());
+        }
         steps.push(StepOutput {
             key: "da".to_string(),
             label: da_label.to_string(),
             status: "done".to_string(),
-            metrics: HashMap::from([
-                (
-                    "Blob tx hash".to_string(),
-                    publication.trace_tx_hash.clone(),
-                ),
-                (
-                    "Payload bytes".to_string(),
-                    publication.payload_bytes.to_string(),
-                ),
-                ("Codec id".to_string(), publication.codec_id.to_string()),
-                ("Gas used".to_string(), publication.gas_used.to_string()),
-                ("Payload hash".to_string(), publication.payload_hash.clone()),
-            ]),
+            metrics,
         });
     } else {
         steps.push(StepOutput {
@@ -1126,6 +1289,9 @@ fn build_steps_from_results(
             "Trace fetch".to_string(),
             resolution.divergence.trace_fetch_status.clone(),
         );
+        if let Some(status) = &resolution.divergence.input_fetch_status {
+            m.insert("Input fetch".to_string(), status.clone());
+        }
         if let Some(index) = resolution.divergence.first_divergence_index {
             m.insert("First divergence index".to_string(), index.to_string());
         }
@@ -1203,9 +1369,11 @@ fn build_steps_from_results(
 }
 
 /// Build the aggregate summary for a run.
+#[allow(clippy::too_many_arguments)]
 fn build_summary(
     raster_result: &Option<raster_workload::RasterWorkloadResult>,
-    da_publication: &Option<shared::da::TracePublication>,
+    input_publication: &Option<shared::da::BlobPublication>,
+    trace_publication: &Option<shared::da::BlobPublication>,
     claim_result: &shared::claimer::ClaimResult,
     resolution: &shared::challenger::AuditResolution,
     outcome_status: &str,
@@ -1218,9 +1386,18 @@ fn build_summary(
         trace_commitment_size_bytes: raster_result
             .as_ref()
             .map(|r| r.trace_commitment_size_bytes),
-        da_gas: da_publication
-            .as_ref()
-            .map(|publication| publication.gas_used),
+        da_gas: Some(
+            input_publication
+                .as_ref()
+                .map(|publication| publication.total_gas_used)
+                .unwrap_or(0)
+                .saturating_add(
+                    trace_publication
+                        .as_ref()
+                        .map(|publication| publication.total_gas_used)
+                        .unwrap_or(0),
+                ),
+        ),
         claim_gas: claim_result.gas_used,
         replay_time_ms: Some(resolution.replay_time_ms),
         fraud_proof_time_ms: None,
@@ -1231,8 +1408,9 @@ fn build_summary(
             reason: resolution.divergence.reason.clone(),
             first_divergence_index: resolution.divergence.first_divergence_index,
             trace_fetch_status: resolution.divergence.trace_fetch_status.clone(),
-            trace_tx_hash: resolution.divergence.trace_tx_hash.clone(),
-            trace_payload_bytes: resolution.divergence.trace_payload_bytes,
+            input_fetch_status: resolution.divergence.input_fetch_status.clone(),
+            input_blob_versioned_hash: resolution.divergence.input_blob_versioned_hash.clone(),
+            trace_blob_versioned_hash: resolution.divergence.trace_blob_versioned_hash.clone(),
         }),
         total_time_ms,
         outcome: outcome_status.to_string(),
@@ -1263,11 +1441,18 @@ fn build_summary(
         } else {
             None
         },
+        input_blob_tx_hash: if is_l2 {
+            Some(claim_result.input_blob_tx_hash.clone())
+        } else {
+            None
+        },
         input_blob_versioned_hash: if is_l2 {
             Some(claim_result.input_blob_versioned_hash.clone())
         } else {
             None
         },
+        trace_blob_tx_hash: Some(claim_result.trace_blob_tx_hash.clone()),
+        trace_blob_versioned_hash: Some(claim_result.trace_blob_versioned_hash.clone()),
         bond_amount: if is_l2 {
             Some(claim_result.bond_amount.clone())
         } else {

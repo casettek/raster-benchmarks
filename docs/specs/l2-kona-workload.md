@@ -249,6 +249,21 @@ test fixtures, but canonical runs do not depend on external historical RPC reads
 The claim object may additionally carry a canonical input blob/versioned-hash
 pointer, but that pointer is outside the execution-program boundary.
 
+## Blob-backed input package contract
+
+- The harness publishes a canonical input-package tarball before claim
+  submission.
+- That package contains the transaction batch input, fixture JSON, rollup
+  config, rewritten witness metadata, and only the minimum extra state/witness
+  data currently required to execute the canonical single-block transition for
+  that batch (rather than the full vendored closure set).
+- The claim stores the input-package manifest blob versioned hash; challenger
+  audit fetches that manifest, fetches its referenced chunks from Anvil, and
+  materializes the package before replay.
+- The workload remains blob-agnostic: it still receives ordinary fixture JSON as
+  `--input`, with file refs resolved by the harness-provided materialization
+  root.
+
 ## Failure model
 
 Failures are categorized for deterministic reporting:

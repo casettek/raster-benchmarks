@@ -51,10 +51,8 @@ The `Claim` struct stores the full canonical L2 transition claim:
 | `startBlock` | `uint64` | First L2 block in the claimed range |
 | `endBlock` | `uint64` | Last L2 block in the claimed range |
 | `batchHash` | `bytes32` | `keccak256(concat(tx1_raw..txN_raw))` of the canonical batch |
-| `inputBlobVersionedHash` | `bytes32` | EIP-4844 versioned hash captured at submit time (0 on Anvil) |
-| `traceTxHash` | `bytes32` | DA pointer: hash of trace publication tx |
-| `tracePayloadBytes` | `uint32` | DA pointer: payload byte length |
-| `traceCodecId` | `uint8` | DA pointer: codec discriminator (2 = `trace.commitment.json` v1) |
+| `inputBlobVersionedHash` | `bytes32` | Canonical input-package manifest blob versioned hash supplied at claim submission |
+| `traceBlobVersionedHash` | `bytes32` | Trace-commitment manifest blob versioned hash supplied at claim submission |
 | `bondAmount` | `uint256` | ETH bond locked by the claimer |
 | `createdAt` | `uint64` | Block timestamp when claim was created |
 | `challengeDeadline` | `uint64` | Timestamp after which settlement is allowed |
@@ -80,7 +78,7 @@ The `Claim` struct stores the full canonical L2 transition claim:
 
 - **Submit**: claimer posts bond (>= `minBond`), contract records claim with
   `challengeDeadline = block.timestamp + challengePeriod`. Claims without a
-  trace pointer are rejected.
+  trace blob hash are rejected.
 - **Challenge**: anyone can challenge before `challengeDeadline` by providing
   a divergent `observedNextOutputRoot`. Claim transitions to `Slashed`, bond
   transferred to challenger. No challenger stake required in v1.
@@ -96,12 +94,9 @@ The `Claim` struct stores the full canonical L2 transition claim:
 
 ### Functions
 
-- `publishTrace(payload, codecId)` publishes trace-commitment payload bytes through a
-  dedicated on-chain tx path and emits `TracePublished` with payload
-  hash/size metadata.
 - `submitClaim(prevOutputRoot, nextOutputRoot, startBlock, endBlock, batchHash,
-  traceTxHash, tracePayloadBytes, traceCodecId)` creates a pending claim with
-  claimer bond. Captures blob versioned hash from tx context. Requires
+  inputBlobVersionedHash, traceBlobVersionedHash)` creates a pending claim with
+  claimer bond and records the two canonical DA references explicitly. Requires
   `msg.value >= minBond`.
 - `challengeClaim(claimId, observedNextOutputRoot)` marks a claim slashed when
   the challenger observes a different `nextOutputRoot`. Must be called before
@@ -114,17 +109,11 @@ The `Claim` struct stores the full canonical L2 transition claim:
 
 ### DA pointer fields
 
-Trace metadata (`traceTxHash`, `tracePayloadBytes`, `traceCodecId`) is
-retained as auxiliary audit/debug metadata. It is not part of the canonical
-claim validity rule — the primary settlement anchor is the `outputRoot`
-transition.
-
-### Blob versioned hash capture
-
-The contract captures `blobhash(0)` at claim-submission time via the EIP-4844
-`BLOBHASH` opcode. On local Anvil without real blobs, this returns `bytes32(0)`.
-The contract model is already blob-backed so larger batches fit later without
-redesign.
+`inputBlobVersionedHash` is the settlement-critical DA binding for the claimed
+execution package. `traceBlobVersionedHash` is the audit-critical DA binding for
+the published trace commitment. The primary settlement anchor is still the
+`outputRoot` transition, but challenger audit now fetches both referenced blob
+artifacts from Anvil before replay/challenge.
 
 ## Determinism requirements
 

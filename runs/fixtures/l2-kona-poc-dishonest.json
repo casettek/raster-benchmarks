@@ -1,8 +1,8 @@
 {
-  "id": "fixture-l2-kona-poc-dishonest",
+  "id": "2026-03-26T16-58-14-l2-kona-poc-dishonest",
   "workload": "l2-kona-poc",
   "scenario": "dishonest",
-  "timestamp": "2026-03-20T12:05:00.000000000+00:00",
+  "timestamp": "2026-03-26T16:58:14.520612694+00:00",
   "raster_pin": {
     "revision": "e218bee19d0caa12b3efba91e9028f49b95e0806"
   },
@@ -12,9 +12,12 @@
       "label": "Prepare Batch",
       "status": "done",
       "metrics": {
-        "Fixture": "l2-poc-synth-fixture.json",
         "Batch hash": "0xb9ef076572948183c38d75a6b8966236c1030c83c0e6ab50b813266de50be229",
-        "Block range": "26207960 → 26207960"
+        "Block range": "26207960 → 26207960",
+        "Input blob tx hash": "0x9964d231284864849b074fcab63b7b788619df47471e129ce83a2f3f17db7616",
+        "Fixture": "l2-poc-synth-fixture.json",
+        "Input blob versioned hash": "0x011aef5df402a95d167ea7d3eeb5ffad6e0440c6c8954b10a782da9bd29758a9",
+        "Input blob chunks": "9"
       }
     },
     {
@@ -22,9 +25,12 @@
       "label": "Execute Program",
       "status": "done",
       "metrics": {
+        "Trace steps": "10",
+        "Trace commitment": "0xf7627bffc6499e489b19979aaf50637061f1469e89c6e52b0eef6eb5a5f60c6d",
+        "Trace commitment file": "runs/artifacts/2026-03-26T16-58-14-l2-kona-poc-dishonest/trace.commitment.json",
+        "Trace commitment size (bytes)": "940",
         "Workload": "l2-kona-poc",
-        "Exec time (ms)": "4150",
-        "Trace steps": "10"
+        "Exec time (ms)": "1092"
       }
     },
     {
@@ -32,11 +38,17 @@
       "label": "Publish to DA",
       "status": "done",
       "metrics": {
-        "Blob tx hash": "0xda02da02da02da02da02da02da02da02da02da02da02da02da02da02da02da02",
-        "Payload bytes": "5120",
-        "Codec id": "1",
-        "Gas used": "162400",
-        "Payload hash": "0xbbff00aabbff00aabbff00aabbff00aabbff00aabbff00aabbff00aabbff00aa"
+        "Trace payload bytes": "940",
+        "Trace blob versioned hash": "0x01f22393ebefb738f6693ad4b63e83de02ae7d7fdff83bde55fd3d11f4916ae7",
+        "Trace codec id": "2",
+        "Trace payload hash": "0x4637d3f0fa37400eada9b293dec2bbd25ef6620d966e728db77101bccb5d10bc",
+        "Input blob tx hash": "0x9964d231284864849b074fcab63b7b788619df47471e129ce83a2f3f17db7616",
+        "Input chunk count": "9",
+        "Input DA gas": "210000",
+        "Input blob versioned hash": "0x011aef5df402a95d167ea7d3eeb5ffad6e0440c6c8954b10a782da9bd29758a9",
+        "Trace DA gas": "42000",
+        "Trace blob tx hash": "0xcb55d7560a750a2b6c85d158a0fcd250412e23c9a30288e74ba166c775b925c5",
+        "Trace chunk count": "1"
       }
     },
     {
@@ -44,19 +56,20 @@
       "label": "Submit Claim",
       "status": "done",
       "metrics": {
-        "Claim ID": "1",
-        "Tx hash": "0xcl02cl02cl02cl02cl02cl02cl02cl02cl02cl02cl02cl02cl02cl02cl02cl02",
-        "Gas used": "168200",
-        "prevOutputRoot": "0x1111111111111111111111111111111111111111111111111111111111111111",
-        "nextOutputRoot": "0xe13f82b2b6e02d94a7b1a2a5a8ca21da71c7d14c1e3e35d97687e7bf86425b17",
-        "startBlock": "26207960",
-        "endBlock": "26207960",
         "batchHash": "0xb9ef076572948183c38d75a6b8966236c1030c83c0e6ab50b813266de50be229",
-        "Bond amount": "1000000000000000000",
-        "Challenge deadline": "1742486820",
-        "Trace tx hash": "0xda02da02da02da02da02da02da02da02da02da02da02da02da02da02da02da02",
-        "Trace payload bytes": "5120",
-        "Trace codec id": "1"
+        "Input blob tx hash": "0x9964d231284864849b074fcab63b7b788619df47471e129ce83a2f3f17db7616",
+        "Trace blob versioned hash": "0x01f22393ebefb738f6693ad4b63e83de02ae7d7fdff83bde55fd3d11f4916ae7",
+        "endBlock": "26207960",
+        "Tx hash": "0xd6e6561f781bbaab73d8e53782a7c4ce270c498386b76e6727d168ef946c455e",
+        "prevOutputRoot": "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "Challenge deadline": "1774544433",
+        "Input blob versioned hash": "0x011aef5df402a95d167ea7d3eeb5ffad6e0440c6c8954b10a782da9bd29758a9",
+        "nextOutputRoot": "0xe13f82b2b6e02d94a7b1a2a5a8ca21da71c7d14c1e3e35d97687e7bf86425b17",
+        "Gas used": "238017",
+        "startBlock": "26207960",
+        "Bond amount": "10000000000000000",
+        "Trace blob tx hash": "0xcb55d7560a750a2b6c85d158a0fcd250412e23c9a30288e74ba166c775b925c5",
+        "Claim ID": "1"
       }
     },
     {
@@ -64,11 +77,11 @@
       "label": "Audit",
       "status": "done",
       "metrics": {
-        "Replay time (ms)": "11",
+        "Input fetch": "fetched",
+        "Reason": "Local replay nextOutputRoot differs from claimed nextOutputRoot while trace commitment matches",
+        "Replay time (ms)": "0",
         "Divergence": "Detected",
-        "Reason": "Local replay nextOutputRoot differs from claimed nextOutputRoot",
-        "Trace fetch": "fetched",
-        "First divergence index": "0"
+        "Trace fetch": "fetched"
       }
     },
     {
@@ -76,9 +89,9 @@
       "label": "Await Finalization",
       "status": "done",
       "metrics": {
-        "Challenge deadline": "1742486820",
         "Challenge period (s)": "120",
-        "Status": "Challenged before deadline"
+        "Status": "Challenged before deadline",
+        "Challenge deadline": "1774544433"
       }
     },
     {
@@ -86,46 +99,52 @@
       "label": "Outcome",
       "status": "slashed",
       "metrics": {
-        "Tx hash": "0xch02ch02ch02ch02ch02ch02ch02ch02ch02ch02ch02ch02ch02ch02ch02ch02",
-        "Gas used": "33500",
-        "Final state": "Slashed",
-        "Proof status": "not-generated",
-        "Claimer nextOutputRoot": "0xe13f82b2b6e02d94a7b1a2a5a8ca21da71c7d14c1e3e35d97687e7bf86425b17",
-        "Observed nextOutputRoot": "0xe13f82b2b6e02d94a7b1a2a5a8ca21db71c7d14c1e3e35d97687e7bf86425b17",
+        "Challenge deadline": "1774544433",
+        "Input blob versioned hash": "0x011aef5df402a95d167ea7d3eeb5ffad6e0440c6c8954b10a782da9bd29758a9",
         "Trace fetch": "fetched",
-        "Trace tx hash": "0xda02da02da02da02da02da02da02da02da02da02da02da02da02da02da02da02",
-        "Trace payload bytes": "5120",
-        "Challenge deadline": "1742486820"
+        "Proof status": "not-generated",
+        "Final state": "Slashed",
+        "Tx hash": "0xe3bb86b27319db6bb58b2fa8b3c6f68627a2cb9f4bf6e0c97f9fee2ed7c8b58f",
+        "Trace blob versioned hash": "0x01f22393ebefb738f6693ad4b63e83de02ae7d7fdff83bde55fd3d11f4916ae7",
+        "Observed nextOutputRoot": "0x1e3f82b2b6e02d94a7b1a2a5a8ca21da71c7d14c1e3e35d97687e7bf86425b17",
+        "Input fetch": "fetched",
+        "Gas used": "41609",
+        "Claimer nextOutputRoot": "0xe13f82b2b6e02d94a7b1a2a5a8ca21da71c7d14c1e3e35d97687e7bf86425b17"
       }
     }
   ],
   "summary": {
-    "exec_time_ms": 4150,
-    "trace_size_bytes": 5120,
-    "da_gas": 162400,
-    "claim_gas": 168200,
-    "replay_time_ms": 11,
+    "exec_time_ms": 1092,
+    "trace_size_bytes": 261304,
+    "trace_commitment_size_bytes": 940,
+    "da_gas": 252000,
+    "claim_gas": 238017,
+    "replay_time_ms": 0,
     "fraud_proof_time_ms": null,
     "fraud_proof_gas": null,
     "proof_status": "not-generated",
     "divergence": {
       "detected": true,
-      "reason": "Local replay nextOutputRoot differs from claimed nextOutputRoot",
-      "first_divergence_index": 0,
+      "reason": "Local replay nextOutputRoot differs from claimed nextOutputRoot while trace commitment matches",
+      "first_divergence_index": null,
       "trace_fetch_status": "fetched",
-      "trace_tx_hash": "0xda02da02da02da02da02da02da02da02da02da02da02da02da02da02da02da02",
-      "trace_payload_bytes": 5120
+      "input_fetch_status": "fetched",
+      "input_blob_versioned_hash": "0x011aef5df402a95d167ea7d3eeb5ffad6e0440c6c8954b10a782da9bd29758a9",
+      "trace_blob_versioned_hash": "0x01f22393ebefb738f6693ad4b63e83de02ae7d7fdff83bde55fd3d11f4916ae7"
     },
-    "total_time_ms": 4720,
+    "total_time_ms": null,
     "outcome": "slashed",
     "prev_output_root": "0x1111111111111111111111111111111111111111111111111111111111111111",
     "next_output_root": "0xe13f82b2b6e02d94a7b1a2a5a8ca21da71c7d14c1e3e35d97687e7bf86425b17",
     "start_block": 26207960,
     "end_block": 26207960,
     "batch_hash": "0xb9ef076572948183c38d75a6b8966236c1030c83c0e6ab50b813266de50be229",
-    "input_blob_versioned_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
-    "bond_amount": "1000000000000000000",
-    "challenge_deadline": 1742486820,
+    "input_blob_tx_hash": "0x9964d231284864849b074fcab63b7b788619df47471e129ce83a2f3f17db7616",
+    "input_blob_versioned_hash": "0x011aef5df402a95d167ea7d3eeb5ffad6e0440c6c8954b10a782da9bd29758a9",
+    "trace_blob_tx_hash": "0xcb55d7560a750a2b6c85d158a0fcd250412e23c9a30288e74ba166c775b925c5",
+    "trace_blob_versioned_hash": "0x01f22393ebefb738f6693ad4b63e83de02ae7d7fdff83bde55fd3d11f4916ae7",
+    "bond_amount": "10000000000000000",
+    "challenge_deadline": 1774544433,
     "challenge_period_seconds": 120
   }
 }

@@ -1,6 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -49,10 +48,22 @@ pub fn warmup_known_workloads() -> Result<()> {
 }
 
 pub fn run(workload: &str, run_id: &str) -> Result<Option<RasterWorkloadResult>> {
+    run_with_input_root(workload, run_id, None, None)
+}
+
+pub fn run_with_input_root(
+    workload: &str,
+    run_id: &str,
+    input_json_override: Option<String>,
+    l2_ref_root: Option<&Path>,
+) -> Result<Option<RasterWorkloadResult>> {
     let spec = workload_spec(workload)?;
 
     ensure_workload_binary(&spec)?;
-    let input_json = workload_input_json(&spec)?;
+    let input_json = match input_json_override {
+        Some(value) => value,
+        None => workload_input_json(&spec)?,
+    };
 
     let start = Instant::now();
     let mut command = Command::new(spec.bin_path);
@@ -60,6 +71,10 @@ pub fn run(workload: &str, run_id: &str) -> Result<Option<RasterWorkloadResult>>
         .current_dir(spec.run_dir)
         .arg("--input")
         .arg(input_json);
+
+    if workload == "l2-kona-poc" && let Some(root) = l2_ref_root {
+        command.env("L2_POC_REF_ROOT", root);
+    }
 
     if workload == "l2-kona-poc"
         && let Ok(mode) = std::env::var("L2_KONA_EXECUTION_MODE")
@@ -167,6 +182,11 @@ fn workload_input_json(spec: &WorkloadSpec) -> Result<String> {
 }
 
 fn ensure_workload_binary(spec: &WorkloadSpec) -> Result<()> {
+    let bin_abs = Path::new(spec.run_dir).join(spec.bin_path);
+    if bin_abs.exists() {
+        return Ok(());
+    }
+
     let build_output = Command::new("cargo")
         .current_dir(spec.run_dir)
         .env("RISC0_SKIP_BUILD", "1")
@@ -183,7 +203,6 @@ fn ensure_workload_binary(spec: &WorkloadSpec) -> Result<()> {
         ));
     }
 
-    let bin_abs = Path::new(spec.run_dir).join(spec.bin_path);
     if !bin_abs.exists() {
         return Err(eyre!(
             "Raster workload build completed but binary was not found at {}",
@@ -249,6 +268,15 @@ pub fn compare_trace_commitments(
 }
 
 pub fn rerun_trace_commitment(workload: &str, label: &str) -> Result<TraceCommitmentArtifact> {
+    rerun_trace_commitment_with_input_root(workload, label, None, None)
+}
+
+pub fn rerun_trace_commitment_with_input_root(
+    workload: &str,
+    label: &str,
+    input_json_override: Option<String>,
+    l2_ref_root: Option<&Path>,
+) -> Result<TraceCommitmentArtifact> {
     let run_id = format!(
         "audit-{}-{}-{}",
         workload,
@@ -258,7 +286,7 @@ pub fn rerun_trace_commitment(workload: &str, label: &str) -> Result<TraceCommit
             .unwrap_or_default()
             .as_millis()
     );
-    let result = run(workload, &run_id)?
+    let result = run_with_input_root(workload, &run_id, input_json_override, l2_ref_root)?
         .ok_or_else(|| eyre!("Raster workload rerun returned no trace commitment"))?;
     let payload = load_trace_commitment_payload(&result)?;
     decode_trace_commitment_payload(&payload)
@@ -394,14 +422,15 @@ enum WorkloadInput {
 mod tests {
     use super::*;
     use raster_core::cfs::CfsCoordinates;
-    use raster_core::trace::{FnCallRecord, FnInputParam, TileExecRecord};
+    use raster_core::trace::{FnCallRecord, FnInputParam};
 
     fn sample_record(name: &str, output: &[u8]) -> StepRecord {
-        StepRecord::TileExec(TileExecRecord {
+        StepRecord {
             exec_index: 1,
             sequence_id: "sample-seq".to_string(),
-            coordinates: CfsCoordinates(vec![0]),
             intra_sequence_index: 0,
+            sequence_callstack_depth: 0,
+            sequence_coordinates: CfsCoordinates(vec![0]),
             fn_call_record: FnCallRecord {
                 fn_name: name.to_string(),
                 desc: None,
@@ -413,7 +442,7 @@ mod tests {
                 output_type: Some("u64".to_string()),
                 output_data: output.to_vec(),
             },
-        })
+        }
     }
 
     #[test]

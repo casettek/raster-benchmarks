@@ -1,4 +1,5 @@
-use std::time::Instant;
+use std::path::PathBuf;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use alloy::primitives::{Address, B256, FixedBytes, U256};
 use alloy::providers::Provider;
@@ -43,8 +44,9 @@ pub struct DivergenceReport {
     pub reason: String,
     pub first_divergence_index: Option<u64>,
     pub trace_fetch_status: String,
-    pub trace_tx_hash: Option<String>,
-    pub trace_payload_bytes: Option<u32>,
+    pub input_fetch_status: Option<String>,
+    pub input_blob_versioned_hash: Option<String>,
+    pub trace_blob_versioned_hash: Option<String>,
     pub observed_next_output_root: String,
 }
 
@@ -166,7 +168,7 @@ pub async fn advance_past_deadline(provider: &AnvilProvider, deadline: u64) -> R
     // Set the next block timestamp to deadline + 1
     let target_timestamp = deadline + 1;
     provider
-        .raw_request::<_, ()>(
+        .raw_request::<_, serde_json::Value>(
             "evm_setNextBlockTimestamp".into(),
             [serde_json::Value::String(format!(
                 "0x{:x}",
@@ -178,7 +180,7 @@ pub async fn advance_past_deadline(provider: &AnvilProvider, deadline: u64) -> R
 
     // Mine a block to apply the timestamp
     provider
-        .raw_request::<_, ()>("evm_mine".into(), ())
+        .raw_request::<_, serde_json::Value>("evm_mine".into(), ())
         .await
         .wrap_err("failed to mine block")?;
 
@@ -229,8 +231,9 @@ pub async fn audit_claim(
 
     let output_root_mismatch = claim.nextOutputRoot != observed_next_output_root;
 
-    let trace_hash = B256::from(claim.traceTxHash);
-    if trace_hash == B256::ZERO {
+    let input_blob_versioned_hash = B256::from(claim.inputBlobVersionedHash);
+    let trace_blob_versioned_hash = B256::from(claim.traceBlobVersionedHash);
+    if trace_blob_versioned_hash == B256::ZERO {
         return Err(eyre!(
             "claim {} is invalid: missing trace pointer",
             claim_id
@@ -246,21 +249,45 @@ pub async fn audit_claim(
         },
         first_divergence_index: None,
         trace_fetch_status: "skipped".to_string(),
-        trace_tx_hash: None,
-        trace_payload_bytes: None,
+        input_fetch_status: None,
+        input_blob_versioned_hash: if input_blob_versioned_hash == B256::ZERO {
+            None
+        } else {
+            Some(format!("0x{}", alloy::hex::encode(input_blob_versioned_hash)))
+        },
+        trace_blob_versioned_hash: Some(format!(
+            "0x{}",
+            alloy::hex::encode(trace_blob_versioned_hash)
+        )),
         observed_next_output_root: format!("0x{}", alloy::hex::encode(observed_next_output_root)),
     };
 
-    let local_trace_commitment =
-        crate::raster_workload::rerun_trace_commitment(workload, &claim_id.to_string())?;
-    let fetched_payload = crate::da::fetch_trace_payload_from_tx(
-        provider,
-        contract_address,
-        trace_hash,
-        claim.tracePayloadBytes,
-        claim.traceCodecId,
-    )
-    .await?;
+    let mut input_json_override = None;
+    let mut l2_ref_root = None;
+    if workload == "l2-kona-poc" && input_blob_versioned_hash != B256::ZERO {
+        let (_manifest, package_bytes) =
+            crate::da::fetch_blob_artifact(provider, input_blob_versioned_hash).await?;
+        let materialized_root = audit_materialized_root(workload, claim_id);
+        crate::input_package::materialize_input_package(&package_bytes, &materialized_root)?;
+        input_json_override = Some(crate::input_package::canonical_fixture_json_from_root(
+            &materialized_root,
+        )?);
+        l2_ref_root = Some(crate::input_package::canonical_fixture_ref_root(
+            &materialized_root,
+        ));
+        divergence.input_fetch_status = Some("fetched".to_string());
+    } else if workload == "l2-kona-poc" {
+        divergence.input_fetch_status = Some("missing".to_string());
+    }
+
+    let local_trace_commitment = crate::raster_workload::rerun_trace_commitment_with_input_root(
+        workload,
+        &claim_id.to_string(),
+        input_json_override,
+        l2_ref_root.as_deref(),
+    )?;
+    let (_trace_manifest, fetched_payload) =
+        crate::da::fetch_blob_artifact(provider, trace_blob_versioned_hash).await?;
     let published_trace_commitment =
         crate::raster_workload::decode_trace_commitment_payload(&fetched_payload)?;
     let commitment_comparison = crate::raster_workload::compare_trace_commitments(
@@ -271,8 +298,6 @@ pub async fn audit_claim(
 
     divergence.detected = output_root_mismatch || commitment_mismatch;
     divergence.trace_fetch_status = "fetched".to_string();
-    divergence.trace_tx_hash = Some(format!("0x{}", alloy::hex::encode(trace_hash)));
-    divergence.trace_payload_bytes = Some(claim.tracePayloadBytes);
     divergence.first_divergence_index = commitment_comparison.first_divergence_index;
     divergence.reason = match (output_root_mismatch, commitment_mismatch) {
         (true, true) => format!(
@@ -294,6 +319,20 @@ pub async fn audit_claim(
         challenge_deadline: claim.challengeDeadline,
         challenge_period,
     })
+}
+
+fn audit_materialized_root(workload: &str, claim_id: U256) -> PathBuf {
+    PathBuf::from("runs")
+        .join("artifacts")
+        .join(format!(
+            "audit-input-{}-{}-{}",
+            workload,
+            claim_id,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        ))
 }
 
 /// Finalize or challenge a claim based on a prior `AuditResult`.

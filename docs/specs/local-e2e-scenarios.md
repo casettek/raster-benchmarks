@@ -95,9 +95,11 @@ blob-agnostic:
 - `blockContextSeed` (`startBlock`, `startTimestamp`, `timestampDeltaSeconds`,
   `gasLimit`, `feeRecipient`, `prevRandao`, `parentBeaconBlockRoot`)
 
-DA/blob references are part of claim packaging, not part of execution input.
-The canonical chunk plan is a sidecar replay contract derived from the same
-fixture, not an additional user-facing runtime input field in this phase.
+DA/blob references are part of claim packaging and challenger audit.
+For the local blob-backed flow, the harness publishes a canonical input-package
+artifact before execution, rewrites witness metadata down to the minimal
+required snapshot set for the claimed replay, fetches/materializes it for
+audit, and keeps the program boundary blob-agnostic.
 
 ## Run lifecycle
 
@@ -106,11 +108,13 @@ L2 runs use the expanded lifecycle:
 1. **Prepare Batch** — load the canonical synthetic fixture and derive batch identity.
 2. **Execute Program** — run the Raster program (10 chunked tile invocations). Trace
    artifacts are folded into execution (no separate `trace` step).
-3. **Publish to DA** — publish `trace.commitment.json` via blob tx.
-4. **Submit Claim** — submit blob-carrying settlement claim with bond, binding:
+3. **Publish to DA** — publish the canonical input package to blob storage, then
+   publish `trace.commitment.json` as a second blob-backed artifact.
+4. **Submit Claim** — submit settlement claim with bond, binding:
    `prevOutputRoot`, `nextOutputRoot`, `startBlock`, `endBlock`, `batchHash`,
-   `inputBlobVersionedHash`.
-5. **Audit** — independent local replay comparison against the published trace commitment.
+   `inputBlobVersionedHash`, `traceBlobVersionedHash`.
+5. **Audit** — fetch both blob-backed artifacts from Anvil, materialize the
+   input package, and compare local replay against the published trace commitment.
 6. **Await Finalization** — challenge-period countdown (120s default).
 7. **Outcome** — terminal `Settled` (honest) or `Slashed` (dishonest).
 
@@ -132,7 +136,8 @@ and `runs/fixtures/l2-kona-poc-dishonest.json`.
 - Submits L2 settlement claim with claimer bond, binding:
   `prevOutputRoot`, `nextOutputRoot`, `startBlock`, `endBlock`, `batchHash`.
 - Contract records `challengeDeadline = createdAt + challengePeriod`.
-- Audit step fetches the published trace commitment and confirms no divergence.
+- Audit step fetches both the published input package and the published trace
+  commitment and confirms no divergence.
 - Await-finalization step waits for the challenge deadline to pass.
 - After challenge deadline, claim settles and bond is returned to claimer.
 - Canonical deterministic `nextOutputRoot` for the synthetic fixture:
@@ -142,7 +147,7 @@ and `runs/fixtures/l2-kona-poc-dishonest.json`.
 
 - Uses same canonical fixture input bytes and block target.
 - Replay/audit flow computes a deliberately wrong `nextOutputRoot` (byte-flipped).
-- Audit step fetches the published trace commitment from the DA pointer and detects divergence.
+- Audit step fetches both published blobs from the DA pointers and detects divergence.
 - Challenger calls `challengeClaim` with the divergent root before the deadline.
 - Await-finalization step shows `Challenged before deadline`.
 - Contract transitions to `Slashed`, bond transferred to challenger.

@@ -818,10 +818,14 @@ fn missing_witness_class(error: &str) -> Option<&'static str> {
 }
 
 fn resolve_ref_path(reference: &str) -> PathBuf {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("..");
+    let root = std::env::var("L2_POC_REF_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("..")
+        });
     root.join(reference)
 }
 

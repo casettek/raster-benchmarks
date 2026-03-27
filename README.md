@@ -49,8 +49,9 @@ Raster workload runs also persist raw trace artifacts plus a compact
 ### 5. Run the L2 Kona POC demo
 
 The `l2-kona-poc` workload demonstrates the full L2 optimistic settlement lifecycle:
-canonical batch preparation, chunked tile execution (10 tiles), blob-carrying claim
-submission, audit replay, challenge-period countdown, and terminal finalization or rejection.
+canonical batch preparation, input-package blob publication, chunked tile execution
+(10 tiles), trace blob publication, claim submission with explicit blob bindings,
+audit replay, challenge-period countdown, and terminal finalization or rejection.
 
 ```bash
 # Honest path — claim settles after challenge period
@@ -62,15 +63,15 @@ cargo run -p runner -- --scenario dishonest --workload l2-kona-poc
 
 The L2 lifecycle uses an expanded step sequence:
 
-1. **Prepare Batch** — loads the canonical synthetic fixture and identifies the batch
+1. **Prepare Batch** — loads the canonical synthetic fixture, compacts the witness package to the minimal replay snapshot, publishes the input package to blob storage, and identifies the batch
 2. **Execute Program** — runs the Raster program (10 chunked tile invocations)
 3. **Publish to DA** — publishes the compact trace-commitment payload for audit
-4. **Submit Claim** — submits the blob-carrying settlement claim with bond
-5. **Audit** — independent local replay comparison
+4. **Submit Claim** — submits the settlement claim with explicit input + trace blob versioned hashes
+5. **Audit** — fetches both blob-backed artifacts from Anvil and performs local replay comparison
 6. **Await Finalization** — challenge-period countdown (120s default on Anvil)
 7. **Outcome** — terminal `Settled` or `Slashed` state
 
-The web UI (`/scenario-runner/`) shows a live countdown timer during the `Await Finalization` step and displays full L2 claim metadata (block range, output roots, batch hash, bond amount) in the summary panel.
+The web UI (`/scenario-runner/`) shows a live countdown timer during the `Await Finalization` step and displays full L2 claim metadata (block range, output roots, batch hash, input blob binding, bond amount) in the summary panel.
 
 ### 5. Environment variables
 

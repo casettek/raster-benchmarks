@@ -30,7 +30,9 @@ pub type AnvilProvider = alloy::providers::fillers::FillProvider<
 /// The provider is configured with the first Anvil dev account as signer.
 /// Hold the returned `AnvilInstance` handle — dropping it kills the process.
 pub fn spawn_anvil() -> Result<(AnvilInstance, AnvilProvider)> {
-    let anvil = alloy::node_bindings::Anvil::new().try_spawn()?;
+    let anvil = alloy::node_bindings::Anvil::new()
+        .args(["--hardfork", "cancun"])
+        .try_spawn()?;
     let signer: PrivateKeySigner = anvil.keys()[0].clone().into();
     let wallet = EthereumWallet::from(signer);
     let provider = ProviderBuilder::new()

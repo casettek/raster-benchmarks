@@ -1,8 +1,8 @@
 {
-  "id": "fixture-raster-hello-honest",
+  "id": "2026-03-26T16-28-55-raster-hello-honest",
   "workload": "raster-hello",
   "scenario": "honest",
-  "timestamp": "2026-03-13T18:28:10.084651551+00:00",
+  "timestamp": "2026-03-26T16:28:55.593251717+00:00",
   "raster_pin": {
     "revision": "e218bee19d0caa12b3efba91e9028f49b95e0806"
   },
@@ -12,9 +12,12 @@
       "label": "Execute",
       "status": "done",
       "metrics": {
-        "Trace steps": "10",
         "Workload": "raster-hello",
-        "Exec time (ms)": "2946"
+        "Trace commitment": "0x1e88cfb5d8aa0438a65fe3160364b3f119f8c3f1cfa21fa0bf729d94e5d411ec",
+        "Exec time (ms)": "174",
+        "Trace steps": "10",
+        "Trace commitment size (bytes)": "940",
+        "Trace commitment file": "runs/artifacts/2026-03-26T16-28-55-raster-hello-honest/trace.commitment.json"
       }
     },
     {
@@ -22,9 +25,12 @@
       "label": "Trace",
       "status": "done",
       "metrics": {
+        "Raster revision": "e218bee19d0caa12b3efba91e9028f49b95e0806",
+        "Trace file": "runs/artifacts/2026-03-26T16-28-55-raster-hello-honest/trace.json",
+        "Trace commitment file": "runs/artifacts/2026-03-26T16-28-55-raster-hello-honest/trace.commitment.json",
         "Trace size (bytes)": "3167",
-        "Trace file": "runs/artifacts/fixture-raster-hello-honest/trace.json",
-        "Raster revision": "e218bee19d0caa12b3efba91e9028f49b95e0806"
+        "Trace commitment": "0x1e88cfb5d8aa0438a65fe3160364b3f119f8c3f1cfa21fa0bf729d94e5d411ec",
+        "Trace commitment size (bytes)": "940"
       }
     },
     {
@@ -32,11 +38,13 @@
       "label": "DA Submission",
       "status": "done",
       "metrics": {
-        "Gas used": "148930",
-        "Blob tx hash": "0xf32aa235df57b82d2977227f98a1384fa89fc0e7494dd5fb3ec299aa385ea464",
-        "Payload bytes": "3167",
-        "Codec id": "1",
-        "Payload hash": "0xaf73c7d34b5d387f615b7c3754b5d095ac7de62f7b4adccab673ceb8dd4110be"
+        "Trace chunk count": "1",
+        "Trace DA gas": "42000",
+        "Trace blob versioned hash": "0x011eaf36dd6687c985b5e1a12553ca7883dafeae50193f63bced302fa24e2a8b",
+        "Trace payload hash": "0x351d5c2a9de76e3311373e7506ad0b135ce6ee53a946bc645d05c7d550d87b1f",
+        "Trace payload bytes": "940",
+        "Trace codec id": "2",
+        "Trace blob tx hash": "0x700e5e063a5ff4a878bb944d02c3261b9c95e54f6d4fc9431604e59a23d621e1"
       }
     },
     {
@@ -44,14 +52,20 @@
       "label": "Submit Claim",
       "status": "done",
       "metrics": {
-        "Gas used": "165733",
-        "Tx hash": "0x994a990b7c903cd083aa78cb16243ea2b142d5fbcd5e1dfb571de013efda248a",
-        "Trace payload bytes": "3167",
-        "Trace tx hash": "0xf32aa235df57b82d2977227f98a1384fa89fc0e7494dd5fb3ec299aa385ea464",
-        "Trace codec id": "1",
-        "Result root": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "Artifact root": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "Claim ID": "1"
+        "Gas used": "197737",
+        "Bond amount": "10000000000000000",
+        "Challenge deadline": "1774542669",
+        "Input blob versioned hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "prevOutputRoot": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "Trace blob tx hash": "0x700e5e063a5ff4a878bb944d02c3261b9c95e54f6d4fc9431604e59a23d621e1",
+        "Claim ID": "1",
+        "Trace blob versioned hash": "0x011eaf36dd6687c985b5e1a12553ca7883dafeae50193f63bced302fa24e2a8b",
+        "nextOutputRoot": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "batchHash": "0x0101010101010101010101010101010101010101010101010101010101010101",
+        "endBlock": "0",
+        "Tx hash": "0xf75634effce47c33307b919205dd658316542b41d93a1d9db2f4a27f3d62c90b",
+        "Input blob tx hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "startBlock": "0"
       }
     },
     {
@@ -61,8 +75,8 @@
       "metrics": {
         "Replay time (ms)": "0",
         "Divergence": "None",
-        "Reason": "Local replay matched claimed result",
-        "Trace fetch": "skipped"
+        "Reason": "Local replay matched claimed nextOutputRoot and published trace commitment",
+        "Trace fetch": "fetched"
       }
     },
     {
@@ -70,36 +84,40 @@
       "label": "Outcome",
       "status": "settled",
       "metrics": {
+        "Tx hash": "0xe05b7644e6b3c3e54bc9874d917f6c44dd25f6ba557002fad77ce5afedc99ad9",
+        "Claimer nextOutputRoot": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "Trace blob versioned hash": "0x011eaf36dd6687c985b5e1a12553ca7883dafeae50193f63bced302fa24e2a8b",
         "Final state": "Settled",
-        "Observed result root": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "Trace fetch": "skipped",
-        "Observed artifact root": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "Gas used": "27938",
-        "Claimer result root": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "Proof status": "not-generated",
-        "Tx hash": "0xaabbf31387aef079dba779437a4e26e8f3185d820a4e07d04e92ad796e6619dd",
-        "Claimer artifact root": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "Observed nextOutputRoot": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "Challenge deadline": "1774542669",
+        "Trace fetch": "fetched",
+        "Gas used": "39259",
+        "Proof status": "not-generated"
       }
     }
   ],
   "summary": {
-    "exec_time_ms": 2946,
+    "exec_time_ms": 174,
     "trace_size_bytes": 3167,
-    "da_gas": 148930,
-    "claim_gas": 165733,
+    "trace_commitment_size_bytes": 940,
+    "da_gas": 42000,
+    "claim_gas": 197737,
     "replay_time_ms": 0,
     "fraud_proof_time_ms": null,
     "fraud_proof_gas": null,
     "proof_status": "not-generated",
     "divergence": {
       "detected": false,
-      "reason": "Local replay matched claimed result",
+      "reason": "Local replay matched claimed nextOutputRoot and published trace commitment",
       "first_divergence_index": null,
-      "trace_fetch_status": "skipped",
-      "trace_tx_hash": null,
-      "trace_payload_bytes": null
+      "trace_fetch_status": "fetched",
+      "input_fetch_status": null,
+      "input_blob_versioned_hash": null,
+      "trace_blob_versioned_hash": "0x011eaf36dd6687c985b5e1a12553ca7883dafeae50193f63bced302fa24e2a8b"
     },
-    "total_time_ms": 3015,
-    "outcome": "settled"
+    "total_time_ms": null,
+    "outcome": "settled",
+    "trace_blob_tx_hash": "0x700e5e063a5ff4a878bb944d02c3261b9c95e54f6d4fc9431604e59a23d621e1",
+    "trace_blob_versioned_hash": "0x011eaf36dd6687c985b5e1a12553ca7883dafeae50193f63bced302fa24e2a8b"
   }
 }
